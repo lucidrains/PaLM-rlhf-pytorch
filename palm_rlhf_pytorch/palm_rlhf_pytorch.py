@@ -26,7 +26,10 @@ class Residual(nn.Module):
         self.fn = fn
 
     def forward(self, x):
-        return self.fn(x) + x
+        y = self.fn(x)
+        if not y.requires_grad and not x.requires_grad:
+            return x.add_(y)
+        return y + x
 
 
 # rotary positional embedding
@@ -46,8 +49,7 @@ class RotaryEmbedding(nn.Module):
 
 
 def rotate_half(x):
-    x = rearrange(x, "... (j d) -> ... j d", j=2)
-    x1, x2 = x.unbind(dim=-2)
+    x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
