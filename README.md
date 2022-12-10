@@ -1,6 +1,6 @@
 ## PaLM + RLHF - Pytorch (wip)
 
-Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of the PaLM architecture
+Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of the PaLM architecture. Maybe I'll add retrieval functionality too, à la <a href="https://github.com/lucidrains/RETRO-pytorch">RETRO</a>
 
 ## Citations
 
