@@ -21,3 +21,12 @@ Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of th
     year    = {2022}
 }
 ```
+
+```bibtex
+@inproceedings{Cobbe2020PhasicPG,
+  title     = {Phasic Policy Gradient},
+  author    = {Karl Cobbe and Jacob Hilton and Oleg Klimov and John Schulman},
+  booktitle = {International Conference on Machine Learning},
+  year      = {2020}
+}
+```
