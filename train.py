@@ -73,7 +73,7 @@ val_loader = cycle(DataLoader(val_dataset, batch_size=BATCH_SIZE))
 
 # optimizer
 
-optim = Adam(model.parameters(), lr=LEARNING_RATE)
+optim = Adam(model.palm_parameters(), lr=LEARNING_RATE)
 
 # training
 

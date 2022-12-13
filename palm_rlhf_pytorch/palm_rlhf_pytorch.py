@@ -6,6 +6,67 @@ from einops import rearrange
 
 from palm_rlhf_pytorch.utils import eval_decorator, top_p, top_k
 
+# helper functions
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    return val if exists(val) else d
+
+def cast_tuple(val, length = 1):
+    return ((val,) * length) if not isinstance(val, tuple) else val
+
+# LoRA - https://arxiv.org/abs/2106.09685
+
+class LoRA(nn.Module):
+    def __init__(
+        self,
+        dim,
+        dim_out,
+        r = 8,
+        alpha = None
+    ):
+        super().__init__()
+        alpha = default(alpha, r)
+        self.scale = alpha / r
+
+        self.A = nn.Parameter(torch.randn(dim, r))
+        self.B = nn.Parameter(torch.zeros(r, dim_out))
+
+    @property
+    def weight(self):
+        return (self.A @ self.B) * self.scale
+
+    def forward(self, x):
+        return x @ self.weight
+
+class FusedLoRA(nn.Module):
+    def __init__(
+        self,
+        dim,
+        dim_outs,
+        Rs = 8,
+        alphas = None
+    ):
+        super().__init__()
+        assert isinstance(dim_outs, tuple)
+        num_dims_out = len(dim_outs)
+        Rs = cast_tuple(Rs, num_dims_out)
+        alphas = cast_tuple(alphas, num_dims_out)
+
+        self.loras = nn.ModuleList([])
+        for dim_out, r, alpha in zip(dim_outs, Rs, alphas):
+            self.loras.append(LoRA(dim, dim_out, r = r, alpha = alpha))
+
+    @property
+    def weight(self):
+        return torch.cat(tuple(lora.weight for lora in self.loras), dim = -1)
+
+    def forward(self, x):
+        return x @ self.weight
+
+
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
 
@@ -27,8 +88,8 @@ class Residual(nn.Module):
         super().__init__()
         self.fn = fn
 
-    def forward(self, x):
-        y = self.fn(x)
+    def forward(self, x, **kwargs):
+        y = self.fn(x, **kwargs)
 
         if not y.requires_grad and not x.requires_grad:
             return x.add_(y)
@@ -88,7 +149,11 @@ class ParallelTransformerBlock(nn.Module):
         self.rotary_emb = RotaryEmbedding(dim_head)
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
+
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
+
+        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1])
+        self.attn_out_lora = LoRA(attn_inner_dim, dim)
 
         self.ff_out = nn.Sequential(
             SwiGLU(),
@@ -116,7 +181,7 @@ class ParallelTransformerBlock(nn.Module):
         self.register_buffer("pos_emb", pos_emb, persistent=False)
         return pos_emb
 
-    def forward(self, x):
+    def forward(self, x, disable_lora = False):
         """
         einstein notation
         b - batch
@@ -135,6 +200,9 @@ class ParallelTransformerBlock(nn.Module):
 
         q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
+        if not disable_lora:
+            lq, lk, lv = self.fused_qkv_lora(x).split(self.fused_dims[:-1], dim=-1)
+            q, k, v = (q + lq), (k + lk), (v + lv)
 
         # split heads
         # they use multi-query single-key-value attention, yet another Noam Shazeer paper
@@ -170,8 +238,15 @@ class ParallelTransformerBlock(nn.Module):
         # merge heads
 
         out = rearrange(out, "b h n d -> b n (h d)")
-        return self.attn_out(out) + self.ff_out(ff)
 
+        attn_out = self.attn_out(out)
+
+        ff_out = self.ff_out(ff)
+
+        if not disable_lora:
+            attn_out = attn_out + self.attn_out_lora(out)
+
+        return attn_out + ff_out
 
 # transformer
 
@@ -204,6 +279,22 @@ class PaLM(nn.Module):
 
         nn.init.normal_(self.token_emb.weight, std=0.02)
 
+    # researcher train palm parameters first
+    # before finetuning
+
+    def palm_parameters(self):
+        return set(self.parameters()) - set(self.finetune_parameters())
+
+    def finetune_parameters(self):
+        loras = []
+
+        for layer in self.layers:
+            loras.extend(layer.fn.attn_out_lora.parameters())
+
+        return set(loras)
+
+    # generate function
+
     @eval_decorator
     @torch.no_grad()
     def generate(
@@ -231,7 +322,8 @@ class PaLM(nn.Module):
     def forward(
         self,
         x,
-        return_loss = False
+        return_loss = False,
+        disable_lora = False
     ):
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
@@ -239,7 +331,7 @@ class PaLM(nn.Module):
         x = self.token_emb(x)
 
         for layer in self.layers:
-            x = layer(x) + x
+            x = layer(x, disable_lora = disable_lora) + x
 
         logits = self.to_logits(x)
 
