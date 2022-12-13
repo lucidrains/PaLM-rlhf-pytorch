@@ -79,7 +79,7 @@ class SwiGLU(nn.Module):
 
 
 class ParallelTransformerBlock(nn.Module):
-    def __init__(self, dim, dim_head=64, heads=8, ff_mult=4, lora=True):
+    def __init__(self, dim, dim_head=64, heads=8, ff_mult=4, lora=True, lora_r=8):
         super().__init__()
         self.norm = LayerNorm(dim)
 
@@ -95,8 +95,8 @@ class ParallelTransformerBlock(nn.Module):
 
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
 
-        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1]) if lora else None
-        self.attn_out_lora = LoRA(attn_inner_dim, dim) if lora else None
+        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1], Rs=lora_r) if lora else None
+        self.attn_out_lora = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
 
         self.ff_out = nn.Sequential(
             SwiGLU(),
@@ -204,7 +204,8 @@ class PaLM(nn.Module):
         dim_head=64,
         heads=8,
         ff_mult=4,
-        lora=True
+        lora=True,
+        lora_r=8,
     ):
         super().__init__()
         self.lora = lora
@@ -213,7 +214,7 @@ class PaLM(nn.Module):
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
-            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult, lora=lora)))
+            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult, lora=lora, lora_r=lora_r)))
 
         self.to_logits = nn.Sequential(
             LayerNorm(dim),
