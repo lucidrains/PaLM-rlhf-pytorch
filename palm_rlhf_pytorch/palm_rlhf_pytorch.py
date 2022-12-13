@@ -143,14 +143,12 @@ class ParallelTransformerBlock(nn.Module):
 
         q = rearrange(q, "b n (h d) -> b h n d", h=h)
 
+        q = q * self.scale
+
         # rotary embeddings
 
         positions = self.get_rotary_embedding(n, device)
-        q, k, v = map(lambda t: apply_rotary_pos_emb(positions, t), (q, k, v))
-
-        # scale
-
-        q = q * self.scale
+        q, k = map(lambda t: apply_rotary_pos_emb(positions, t), (q, k))
 
         # similarity
 
