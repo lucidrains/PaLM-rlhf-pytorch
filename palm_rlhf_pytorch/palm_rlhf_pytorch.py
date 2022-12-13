@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 from einops import rearrange
 
+from palm_rlhf_pytorch.utils import eval_decorator, top_p, top_k
+
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
 
@@ -27,10 +29,11 @@ class Residual(nn.Module):
 
     def forward(self, x):
         y = self.fn(x)
+
         if not y.requires_grad and not x.requires_grad:
             return x.add_(y)
-        return y + x
 
+        return y + x
 
 # rotary positional embedding
 # https://arxiv.org/abs/2104.09864
@@ -56,9 +59,6 @@ def rotate_half(x):
 def apply_rotary_pos_emb(pos, t):
     return (t * pos.cos()) + (rotate_half(t) * pos.sin())
 
-
-def l2norm(t):
-    return F.normalize(t, dim = -1)
 
 # classic Noam Shazeer paper, except here they use SwiGLU instead of the more popular GEGLU for gating the feedforward
 # https://arxiv.org/abs/2002.05202
@@ -133,7 +133,7 @@ class ParallelTransformerBlock(nn.Module):
 
         # attention queries, keys, values, and feedforward inner
 
-        q, kv, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
+        q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
 
         # split heads
@@ -178,19 +178,75 @@ class ParallelTransformerBlock(nn.Module):
 # transformer
 
 
-def PaLM(*, dim, num_tokens, depth, dim_head=64, heads=8, ff_mult=4):
-    net = nn.Sequential(
-        nn.Embedding(num_tokens, dim),
-        *[
-            Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult))
-            for _ in range(depth)
-        ],
-        LayerNorm(dim),
-        nn.Linear(dim, num_tokens, bias=False)
-    )
+class PaLM(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        num_tokens,
+        depth,
+        dim_head=64,
+        heads=8,
+        ff_mult=4
+    ):
+        super().__init__()
 
-    # they used embedding weight tied projection out to logits, not common, but works
-    net[-1].weight = net[0].weight
+        self.token_emb = nn.Embedding(num_tokens, dim)
+        self.layers = nn.ModuleList([])
 
-    nn.init.normal_(net[0].weight, std=0.02)
-    return net
+        for _ in range(depth):
+            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult)))
+
+        self.to_logits = nn.Sequential(
+            LayerNorm(dim),
+            nn.Linear(dim, num_tokens, bias=False)
+        )        
+        
+        self.to_logits[-1].weight = self.token_emb.weight
+
+        nn.init.normal_(self.token_emb.weight, std=0.02)
+
+    @eval_decorator
+    @torch.no_grad()
+    def generate(
+        self,
+        prime,
+        seq_len,
+        temperature = 1.,
+        filter_logits_fn = top_k,
+        filter_thres = 0.9,
+        **kwargs
+    ):
+        n, out = prime.shape[-1], prime.clone()
+
+        for _ in range(seq_len):
+            logits = self.forward(out, **kwargs)
+
+            filtered_logits = filter_logits_fn(logits[:, -1], thres = filter_thres)
+            probs = F.softmax(filtered_logits / temperature, dim=-1)
+
+            sample = torch.multinomial(probs, 1)
+            out = torch.cat((out, sample), dim=-1)
+
+        return out[:, n:]
+
+    def forward(
+        self,
+        x,
+        return_loss = False
+    ):
+        if return_loss:
+            x, labels = x[:, :-1], x[:, 1:]
+
+        x = self.token_emb(x)
+
+        for layer in self.layers:
+            x = layer(x) + x
+
+        logits = self.to_logits(x)
+
+        if not return_loss:
+            return logits
+
+        logits = rearrange(logits, 'b n c -> b c n')
+        return F.cross_entropy(logits, labels)
