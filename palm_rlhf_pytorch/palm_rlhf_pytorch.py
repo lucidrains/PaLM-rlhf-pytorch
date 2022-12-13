@@ -136,7 +136,7 @@ class SwiGLU(nn.Module):
 
 
 class ParallelTransformerBlock(nn.Module):
-    def __init__(self, dim, dim_head=64, heads=8, ff_mult=4):
+    def __init__(self, dim, dim_head=64, heads=8, ff_mult=4, lora=True):
         super().__init__()
         self.norm = LayerNorm(dim)
 
@@ -152,8 +152,8 @@ class ParallelTransformerBlock(nn.Module):
 
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
 
-        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1])
-        self.attn_out_lora = LoRA(attn_inner_dim, dim)
+        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1]) if lora else None
+        self.attn_out_lora = LoRA(attn_inner_dim, dim) if lora else None
 
         self.ff_out = nn.Sequential(
             SwiGLU(),
@@ -200,7 +200,7 @@ class ParallelTransformerBlock(nn.Module):
 
         q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
-        if not disable_lora:
+        if exists(self.fused_qkv_lora) and not disable_lora:
             lq, lk, lv = self.fused_qkv_lora(x).split(self.fused_dims[:-1], dim=-1)
             q, k, v = (q + lq), (k + lk), (v + lv)
 
@@ -243,7 +243,7 @@ class ParallelTransformerBlock(nn.Module):
 
         ff_out = self.ff_out(ff)
 
-        if not disable_lora:
+        if exists(self.attn_out_lora) and not disable_lora:
             attn_out = attn_out + self.attn_out_lora(out)
 
         return attn_out + ff_out
@@ -260,15 +260,17 @@ class PaLM(nn.Module):
         depth,
         dim_head=64,
         heads=8,
-        ff_mult=4
+        ff_mult=4,
+        lora=True
     ):
         super().__init__()
+        self.lora = lora
 
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
-            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult)))
+            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult, lora=lora)))
 
         self.to_logits = nn.Sequential(
             LayerNorm(dim),
@@ -283,9 +285,14 @@ class PaLM(nn.Module):
     # before finetuning
 
     def palm_parameters(self):
+        if not self.lora:
+            return self.parameters()
+
         return set(self.parameters()) - set(self.finetune_parameters())
 
     def finetune_parameters(self):
+        assert self.lora, 'lora not present on this palm'
+
         loras = []
 
         for layer in self.layers:
