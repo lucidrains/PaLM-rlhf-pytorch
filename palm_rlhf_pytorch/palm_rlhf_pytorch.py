@@ -1,14 +1,30 @@
+from contextlib import ExitStack, contextmanager, nullcontext
+
 import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
 from einops import rearrange
 
-from palm_rlhf_pytorch.utils import eval_decorator, top_p, top_k
+from palm_rlhf_pytorch.utils import top_p, top_k
 from palm_rlhf_pytorch.lora import LoRA
 
 def exists(val):
     return val is not None
+
+@contextmanager
+def multi_context(*cms):
+    with ExitStack() as stack:
+        yield [stack.enter_context(cls()) for cls in cms]
+
+def eval_decorator(model):
+    @contextmanager
+    def inner():
+        was_training = model.training
+        model.eval()
+        yield
+        model.train(was_training)
+    return inner
 
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
@@ -256,8 +272,6 @@ class PaLM(nn.Module):
 
     # generate function
 
-    @eval_decorator
-    @torch.no_grad()
     def generate(
         self,
         prime,
@@ -265,18 +279,22 @@ class PaLM(nn.Module):
         temperature = 1.,
         filter_logits_fn = top_k,
         filter_thres = 0.9,
+        trainable = False,
         **kwargs
     ):
         n, out = prime.shape[-1], prime.clone()
 
-        for _ in range(seq_len):
-            logits = self.forward(out, **kwargs)
+        context = multi_context(eval_decorator(self), torch.no_grad) if not trainable else nullcontext
 
-            filtered_logits = filter_logits_fn(logits[:, -1], thres = filter_thres)
-            probs = F.softmax(filtered_logits / temperature, dim=-1)
+        with context:
+            for _ in range(seq_len):
+                logits = self.forward(out, **kwargs)
 
-            sample = torch.multinomial(probs, 1)
-            out = torch.cat((out, sample), dim=-1)
+                filtered_logits = filter_logits_fn(logits[:, -1], thres = filter_thres)
+                probs = F.softmax(filtered_logits / temperature, dim=-1)
+
+                sample = torch.multinomial(probs, 1)
+                out = torch.cat((out, sample), dim=-1)
 
         return out[:, n:]
 

@@ -3,17 +3,6 @@ import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
-# decorators
-
-def eval_decorator(fn):
-    def inner(model, *args, **kwargs):
-        was_training = model.training
-        model.eval()
-        out = fn(model, *args, **kwargs)
-        model.train(was_training)
-        return out
-    return inner
-
 # sampling helpers
 
 def top_p(logits, thres = 0.9):
