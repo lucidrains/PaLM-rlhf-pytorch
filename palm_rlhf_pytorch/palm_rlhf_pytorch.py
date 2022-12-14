@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from palm_rlhf_pytorch.utils import eval_decorator, top_p, top_k
-from palm_rlhf_pytorch.lora import LoRA, FusedLoRA
+from palm_rlhf_pytorch.lora import LoRA
 
 def exists(val):
     return val is not None
@@ -95,8 +95,18 @@ class ParallelTransformerBlock(nn.Module):
 
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
 
-        self.fused_qkv_lora = FusedLoRA(dim, self.fused_dims[:-1], Rs=lora_r) if lora else None
-        self.attn_out_lora = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
+        # fine tuning parameters
+
+        self.qkv_lora = self.attn_out_lora = None
+
+        if lora:
+            self.qkv_lora = nn.ModuleList([
+                LoRA(dim, dim_out, r=lora_r) for dim_out in self.fused_dims[:-1]
+            ])
+
+            self.attn_out_lora = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
+
+        # parallel feedforward tail
 
         self.ff_out = nn.Sequential(
             SwiGLU(),
@@ -143,8 +153,8 @@ class ParallelTransformerBlock(nn.Module):
 
         q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
-        if exists(self.fused_qkv_lora) and not disable_lora:
-            lq, lk, lv = self.fused_qkv_lora(x).split(self.fused_dims[:-1], dim=-1)
+        if exists(self.qkv_lora) and not disable_lora:
+            lq, lk, lv = tuple(lora(x) for lora in self.qkv_lora)
             q, k, v = (q + lq), (k + lk), (v + lv)
 
         # split heads
