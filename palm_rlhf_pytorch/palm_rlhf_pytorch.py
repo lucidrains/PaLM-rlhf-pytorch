@@ -242,12 +242,10 @@ class PaLM(nn.Module):
         for _ in range(depth):
             self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult, lora=lora, lora_r=lora_r)))
 
-        self.to_logits = nn.Sequential(
-            LayerNorm(dim),
-            nn.Linear(dim, num_tokens, bias=False)
-        )        
+        self.norm = LayerNorm(dim)
+        self.to_logits = nn.Linear(dim, num_tokens, bias=False)
         
-        self.to_logits[-1].weight = self.token_emb.weight
+        self.to_logits.weight = self.token_emb.weight
 
         nn.init.normal_(self.token_emb.weight, std=0.02)
 
@@ -302,7 +300,8 @@ class PaLM(nn.Module):
         self,
         x,
         return_loss = False,
-        disable_lora = False
+        disable_lora = False,
+        return_embedding = False
     ):
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
@@ -311,6 +310,11 @@ class PaLM(nn.Module):
 
         for layer in self.layers:
             x = layer(x, disable_lora = disable_lora) + x
+
+        x = self.norm(x)
+
+        if return_embedding:
+            return x
 
         logits = self.to_logits(x)
 
