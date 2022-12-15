@@ -4,7 +4,8 @@ import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
-from einops import rearrange
+from einops import rearrange, reduce
+from einops.layers.torch import Rearrange
 
 from palm_rlhf_pytorch.utils import top_p, top_k
 from palm_rlhf_pytorch.lora import LoRA
@@ -234,6 +235,7 @@ class PaLM(nn.Module):
         lora_r=8,
     ):
         super().__init__()
+        self.dim = dim
         self.lora = lora
 
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -323,3 +325,24 @@ class PaLM(nn.Module):
 
         logits = rearrange(logits, 'b n c -> b c n')
         return F.cross_entropy(logits, labels)
+
+# Reward Model - PaLM with a scalar head
+
+class RewardModel(nn.Module):
+    def __init__(
+        self,
+        palm: PaLM
+    ):
+        super().__init__()
+        self.palm = palm
+
+        self.to_pred = nn.Sequential(
+            nn.Linear(palm.dim, 1, bias = False),
+            Rearrange('... 1 -> ...')
+        )
+
+    def forward(self, x):
+        embeds = self.palm(x, return_embedding = True)
+
+        pooled = reduce(embeds, 'b n d -> b d', 'mean')
+        return self.to_pred(pooled)
