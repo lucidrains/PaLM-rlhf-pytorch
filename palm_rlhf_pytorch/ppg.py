@@ -1,15 +1,17 @@
 import os
 import fire
-from collections import deque, namedtuple
-
 from tqdm import tqdm
 import numpy as np
+from collections import deque, namedtuple
+
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from torch.optim import Adam
 from torch.distributions import Categorical
 import torch.nn.functional as F
+from torch.optim import Adam
+
+from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, ActorWithValueHead, RewardModel
 
 # constants
 
@@ -55,47 +57,6 @@ def init_(m):
         if m.bias is not None:
             torch.nn.init.zeros_(m.bias)
 
-# networks
-
-class Actor(nn.Module):
-    def __init__(self, state_dim, hidden_dim, num_actions):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh()
-        )
-
-        self.action_head = nn.Sequential(
-            nn.Linear(hidden_dim, num_actions),
-            nn.Softmax(dim=-1)
-        )
-
-        self.value_head = nn.Linear(hidden_dim, 1)
-        self.apply(init_)
-
-    def forward(self, x):
-        hidden = self.net(x)
-        return self.action_head(hidden), self.value_head(hidden)
-
-class Critic(nn.Module):
-    def __init__(self, state_dim, hidden_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1),
-        )
-        self.apply(init_)
-
-    def forward(self, x):
-        return self.net(x)
-
 # agent
 
 def clipped_value_loss(values, rewards, old_values, clip):
@@ -107,6 +68,8 @@ def clipped_value_loss(values, rewards, old_values, clip):
 class PPG:
     def __init__(
         self,
+        actor_critic: ActorWithValueHead,
+        reward_model: RewardModel,
         state_dim,
         num_actions,
         actor_hidden_dim,
@@ -122,10 +85,9 @@ class PPG:
         eps_clip,
         value_clip
     ):
-        self.actor = Actor(state_dim, actor_hidden_dim, num_actions).to(device)
-        self.critic = Critic(state_dim, critic_hidden_dim).to(device)
-        self.opt_actor = Adam(self.actor.parameters(), lr=lr, betas=betas)
-        self.opt_critic = Adam(self.critic.parameters(), lr=lr, betas=betas)
+        self.actor_critic = actor_critic
+        self.opt_actor = Adam(actor_critic.palm.finetune_parameters(), lr=lr, betas=betas)
+        self.opt_critic = Adam(actor_critic.value_head.parameters(), lr=lr, betas=betas)
 
         self.minibatch_size = minibatch_size
 
@@ -141,8 +103,7 @@ class PPG:
 
     def save(self):
         torch.save({
-            'actor': self.actor.state_dict(),
-            'critic': self.critic.state_dict()
+            'actor_critic': self.actor_critic.state_dict()
         }, f'./ppg.pt')
 
     def load(self):
@@ -150,8 +111,7 @@ class PPG:
             return
 
         data = torch.load(f'./ppg.pt')
-        self.actor.load_state_dict(data['actor'])
-        self.critic.load_state_dict(data['critic'])
+        self.actor_critic.load_state_dict(data['actor_critic'])        
 
     def learn(self, memories, aux_memories, next_state):
         # retrieve and prepare data from memory for training
