@@ -346,3 +346,26 @@ class RewardModel(nn.Module):
 
         pooled = reduce(embeds, 'b n d -> b d', 'mean')
         return self.to_pred(pooled)
+
+# PaLM with actor and critic heads
+
+class ActorWithValueHead(nn.Module):
+    def __init__(
+        self,
+        palm: PaLM
+    ):
+        super().__init__()
+        self.palm = palm
+
+        self.value_head = nn.Sequential(
+            nn.Linear(palm.dim, 1),
+            Rearrange('... 1 -> ...')
+        )
+
+    def forward(self, x):
+        embeds = self.palm(x, return_embedding = True)
+
+        actions = self.palm.to_logits(embeds)
+        values = self.value_head(embeds)
+
+        return actions, values
