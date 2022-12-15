@@ -341,11 +341,23 @@ class RewardModel(nn.Module):
             Rearrange('... 1 -> ...')
         )
 
-    def forward(self, x):
+    def forward(
+        self,
+        x,
+        labels = None,
+        return_loss = False
+    ):
         embeds = self.palm(x, return_embedding = True)
 
         pooled = reduce(embeds, 'b n d -> b d', 'mean')
-        return self.to_pred(pooled)
+        pred = self.to_pred(pooled)
+
+        if not return_loss:
+            return pred
+
+        assert exists(labels)
+
+        return F.mse_loss(pred, labels)
 
 # PaLM with actor and critic heads
 
