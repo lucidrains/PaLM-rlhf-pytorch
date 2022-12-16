@@ -303,12 +303,16 @@ class PaLM(nn.Module):
         x,
         return_loss = False,
         disable_lora = False,
+        extra_embed = None,
         return_embedding = False
     ):
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
 
         x = self.token_emb(x)
+
+        if exists(extra_embed):
+            x = x + extra_embed
 
         for layer in self.layers:
             x = layer(x, disable_lora = disable_lora) + x
@@ -336,23 +340,37 @@ class RewardModel(nn.Module):
     ):
         super().__init__()
         self.palm = palm
+        dim = palm.dim
 
         self.binned_output = num_binned_output > 0
 
+        self.prompt_embed = nn.Parameter(torch.zeros(1, 1, dim))
+        self.response_embed = nn.Parameter(torch.zeros(1, 1, dim))
+
         if self.binned_output > 0:
-            self.to_pred = nn.Linear(palm.dim, num_binned_output)
+            self.to_pred = nn.Linear(dim, num_binned_output)
         else:
             self.to_pred = nn.Sequential(
-                nn.Linear(palm.dim, 1, bias = False),
+                nn.Linear(dim, 1, bias = False),
                 Rearrange('... 1 -> ...')
             )
 
     def forward(
         self,
         x,
+        prompt_mask = None,
         labels = None
     ):
-        embeds = self.palm(x, return_embedding = True)
+        extra_embed = None
+        if exists(prompt_mask):
+            # reward model should have an understanding of which section is prompt, and which section is response
+            extra_embed = torch.where(
+                rearrange(prompt_mask, 'b n -> b n 1'),
+                self.prompt_embed,
+                self.response_embed
+            )
+
+        embeds = self.palm(x, extra_embed = extra_embed, return_embedding = True)
 
         pooled = reduce(embeds, 'b n d -> b d', 'mean')
         pred = self.to_pred(pooled)
