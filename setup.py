@@ -19,8 +19,8 @@ setup(
     'human feedback'
   ],
   install_requires=[
+    'beartype',
     'einops>=0.6',
-    'numpy',
     'torch>=1.6',
     'tqdm'
   ],
