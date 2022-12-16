@@ -5,7 +5,7 @@ from torch import einsum, nn
 import torch.nn.functional as F
 
 from einops import rearrange, reduce
-from einops.layers.torch import Rearrange
+from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k
 from palm_rlhf_pytorch.lora import LoRA
@@ -370,12 +370,14 @@ class RewardModel(nn.Module):
 class ActorWithValueHead(nn.Module):
     def __init__(
         self,
-        palm: PaLM
+        palm: PaLM,
+        pooled_values = False
     ):
         super().__init__()
         self.palm = palm
 
         self.value_head = nn.Sequential(
+            Reduce('b n d -> b d', 'mean') if pooled_values else nn.Identity(),
             nn.Linear(palm.dim, 1),
             Rearrange('... 1 -> ...')
         )

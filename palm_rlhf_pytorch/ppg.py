@@ -1,15 +1,14 @@
 import os
 import fire
 from tqdm import tqdm
-import numpy as np
 from collections import deque, namedtuple
 
 import torch
 from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from torch.distributions import Categorical
 import torch.nn.functional as F
+
 from torch.optim import Adam
+from torch.utils.data import Dataset, DataLoader
 
 from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, ActorWithValueHead, RewardModel
 
