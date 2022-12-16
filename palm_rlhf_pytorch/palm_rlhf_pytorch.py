@@ -331,33 +331,39 @@ class PaLM(nn.Module):
 class RewardModel(nn.Module):
     def __init__(
         self,
-        palm: PaLM
+        palm: PaLM,
+        num_binned_output = 0.
     ):
         super().__init__()
         self.palm = palm
 
-        self.to_pred = nn.Sequential(
-            nn.Linear(palm.dim, 1, bias = False),
-            Rearrange('... 1 -> ...')
-        )
+        self.binned_output = num_binned_output > 0
+
+        if self.binned_output > 0:
+            self.to_pred = nn.Linear(palm.dim, num_binned_output)
+        else:
+            self.to_pred = nn.Sequential(
+                nn.Linear(palm.dim, 1, bias = False),
+                Rearrange('... 1 -> ...')
+            )
 
     def forward(
         self,
         x,
-        labels = None,
-        return_loss = False
+        labels = None
     ):
         embeds = self.palm(x, return_embedding = True)
 
         pooled = reduce(embeds, 'b n d -> b d', 'mean')
         pred = self.to_pred(pooled)
 
-        if not return_loss:
+        if not exists(labels):
             return pred
 
-        assert exists(labels)
+        if not self.binned_output:
+            return F.mse_loss(pred, labels)
 
-        return F.mse_loss(pred, labels)
+        return F.cross_entropy(pred, labels)
 
 # PaLM with actor and critic heads
 
