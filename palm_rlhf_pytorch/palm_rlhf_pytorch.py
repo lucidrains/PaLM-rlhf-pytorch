@@ -340,6 +340,7 @@ class PaLM(nn.Module):
         x,
         return_loss = False,
         disable_lora = False,
+        lora_scope = 'default',
         extra_embed = None,
         return_embedding = False
     ):
@@ -352,7 +353,7 @@ class PaLM(nn.Module):
             x = x + extra_embed
 
         for layer in self.layers:
-            x = layer(x, disable_lora = disable_lora)
+            x = layer(x, disable_lora = disable_lora, lora_scope = lora_scope)
 
         x = self.norm(x)
 
@@ -373,7 +374,8 @@ class RewardModel(nn.Module):
     def __init__(
         self,
         palm: PaLM,
-        num_binned_output = 0.
+        num_binned_output = 0.,
+        reward_lora_scope = None,
     ):
         super().__init__()
         self.palm = palm
@@ -392,11 +394,19 @@ class RewardModel(nn.Module):
                 Rearrange('... 1 -> ...')
             )
 
+    def finetune_parameters(self, lora_scope='default'):
+        return [
+            *self.to_pred.parameters(),
+            *palm.finetune_parameters(lora_scope=lora_scope)
+        ]
+
     def forward(
         self,
         x,
         prompt_mask = None,
-        labels = None
+        labels = None,
+        disable_lora=True,
+        lora_scope='default'
     ):
         extra_embed = None
         if exists(prompt_mask):
@@ -407,7 +417,13 @@ class RewardModel(nn.Module):
                 self.response_embed
             )
 
-        embeds = self.palm(x, extra_embed = extra_embed, return_embedding = True)
+        embeds = self.palm(
+            x,
+            extra_embed = extra_embed,
+            return_embedding = True,
+            disable_lora = disable_lora,
+            lora_scope = lora_scope
+        )
 
         pooled = reduce(embeds, 'b n d -> b d', 'mean')
         pred = self.to_pred(pooled)
@@ -426,10 +442,14 @@ class ActorWithValueHead(nn.Module):
     def __init__(
         self,
         palm: PaLM,
-        pooled_values = False
+        pooled_values = False,
+        actor_lora_scope = 'default',
+        critic_lora_scope = 'default',
     ):
         super().__init__()
         self.palm = palm
+        self.actor_lora_scope = actor_lora_scope
+        self.critic_lora_scope = critic_lora_scope
 
         self.value_head = nn.Sequential(
             Reduce('b n d -> b d', 'mean') if pooled_values else nn.Identity(),
@@ -437,10 +457,34 @@ class ActorWithValueHead(nn.Module):
             Rearrange('... 1 -> ...')
         )
 
-    def forward(self, x):
-        embeds = self.palm(x, return_embedding = True)
+    def actor_parameters(self):
+        return [
+            *palm.finetune_parameters(self.actor_lora_scope)
+        ]
 
-        actions = self.palm.to_logits(embeds)
-        values = self.value_head(embeds)
+    def critic_parameters(self):
+        return [
+            *palm.finetune_parameters(self.critic_lora_scope),
+            *self.value_head.parameters()
+        ]
+
+    def forward(self, x):
+        actor_embeds = self.palm(
+            x,
+            return_embedding = True,
+            lora_scope = self.actor_lora_scope
+        )
+
+        critic_embeds = actor_embeds
+        if self.actor_lora_scope != self.critic_lora_scope:
+            critic_embeds = self.palm(
+                x,
+                return_embeddings = True,
+                lora_scope = self.critic_lora_scope
+            )
+
+
+        actions = self.palm.to_logits(actor_embeds)
+        values = self.value_head(critic_embeds)
 
         return actions, values
