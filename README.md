@@ -2,6 +2,118 @@
 
 Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of the PaLM architecture. Maybe I'll add retrieval functionality too, à la <a href="https://github.com/lucidrains/RETRO-pytorch">RETRO</a>
 
+## Install
+
+```bash
+$ pip install palm-rlhf-pytorch
+```
+
+## Usage
+
+First train `PaLM`, like any other autoregressive transformer
+
+```python
+import torch
+
+palm = PaLM(
+    num_tokens = 20000,
+    dim = 512,
+    depth = 12
+).cuda()
+
+seq = torch.randint(0, 20000, (1, 2048)).cuda()
+
+loss = palm(seq, return_loss = True)
+loss.backward()
+
+# after much training, you can now generate sequences
+
+generated = palm.generate(2048) # (1, 2048)
+```
+
+Then train your reward model, with the curated human feedback. In the original paper, they could not get reward model to be finetuned from a pretrained transformer without overfitting, but I gave the option to finetune with `LoRA` anyways, since it is still open research.
+
+```python
+import torch
+from palm_rlhf_pytorch import PaLM, RewardModel
+
+palm = PaLM(
+    num_tokens = 20000,
+    dim = 512,
+    depth = 12
+)
+
+reward_model = RewardModel(
+    palm,
+    num_binned_output = 5 # say rating from 1 to 5
+).cuda()
+
+# mock data
+
+seq = torch.randint(0, 20000, (1, 1024)).cuda()
+prompt_mask = torch.zeros(1, 1024).bool().cuda() # which part of the sequence is prompt, which part is response
+labels = torch.randint(0, 5, (1,)).cuda()
+
+# train
+
+loss = reward_model(seq, prompt_mask = prompt_mask, labels = labels)
+loss.backward()
+
+# after much training
+
+reward = reward_model(seq, prompt_mask = prompt_mask)
+```
+
+Then you will pass your transformer and the rewards model to the `RLHFTrainer`
+
+```python
+import torch
+from palm_rlhf_pytorch import PaLM, RewardModel, RLHFTrainer
+
+# load your pretrained palm
+
+palm = PaLM(
+    num_tokens=256,
+    dim=512,
+    depth=8
+).cuda()
+
+palm.load('./path/to/pretrained/palm.pt')
+
+# load your pretrained reward model
+
+reward_model = RewardModel(
+    palm,
+    num_binned_output = 5
+).cuda()
+
+reward_model.load('./path/to/pretrained/reward_model.pt')
+
+# ready your list of prompts for reinforcement learning
+
+prompts = torch.randint(0, 256, (50000, 512)).cuda() # 50k prompts
+
+# pass it all to the trainer and train
+
+trainer = RLHFTrainer(
+    palm = palm,
+    reward_model = reward_model,
+    prompt_token_ids = prompts
+)
+
+trainer.train(num_episodes = 50000)
+
+# then, if it succeeded...
+
+answer = palm.generate(2048, prompts = prompts[0])
+```
+
+## Appreciation
+
+- <a href="https://stability.ai/">Stability.ai</a> for the generous sponsorship to work on cutting edge artificial intelligence research
+
+- <a href="https://huggingface.co/">🤗 Huggingface</a> and <a href="https://carper.ai/">CarperAI</a> for penning the blog post <a href="https://huggingface.co/blog/rlhf">Illustrating Reinforcement Learning from Human Feedback (RLHF)</a>, and the latter also for their accelerate library
+
 ## Citations
 
 ```bibtex
