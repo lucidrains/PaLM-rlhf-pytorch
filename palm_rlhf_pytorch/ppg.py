@@ -56,6 +56,9 @@ def log(t, eps = 1e-20):
 def get_log_prob(prob, indices, dim = -1):
     return log(prob.gather(dim, indices))
 
+def get_entropy(prob, dim = -1):
+    return -torch.sum(prob * log(prob), dim = dim)
+
 def update_network_(loss, optimizer):
     optimizer.zero_grad()
     loss.mean().backward()
