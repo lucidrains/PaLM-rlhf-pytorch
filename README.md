@@ -40,7 +40,8 @@ from palm_rlhf_pytorch import PaLM, RewardModel
 palm = PaLM(
     num_tokens = 20000,
     dim = 512,
-    depth = 12
+    depth = 12,
+    causal = False
 )
 
 reward_model = RewardModel(

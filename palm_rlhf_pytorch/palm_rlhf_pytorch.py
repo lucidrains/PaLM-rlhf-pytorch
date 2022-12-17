@@ -106,6 +106,7 @@ class ParallelTransformerBlock(nn.Module):
         self,
         dim,
         dim_head = 64,
+        causal = True,
         heads = 8,
         ff_mult = 4,
         lora = True,
@@ -123,6 +124,8 @@ class ParallelTransformerBlock(nn.Module):
 
         self.heads = heads
         self.scale = dim_head**-0.5
+        self.causal = causal
+
         self.rotary_emb = RotaryEmbedding(dim_head)
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
@@ -225,8 +228,9 @@ class ParallelTransformerBlock(nn.Module):
 
         # causal mask
 
-        causal_mask = self.get_mask(n, device)
-        sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+        if self.causal:
+            causal_mask = self.get_mask(n, device)
+            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
         # attention
 
@@ -260,6 +264,7 @@ class PaLM(nn.Module):
         dim,
         num_tokens,
         depth,
+        causal = True,
         dim_head = 64,
         heads = 8,
         ff_mult = 4,
@@ -279,6 +284,7 @@ class PaLM(nn.Module):
         for _ in range(depth):
             block = Residual(ParallelTransformerBlock(
                 dim = dim,
+                causal = causal,
                 dim_head = dim_head,
                 heads = heads,
                 ff_mult = ff_mult,
