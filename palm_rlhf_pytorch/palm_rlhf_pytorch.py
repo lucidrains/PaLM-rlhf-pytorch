@@ -1,5 +1,7 @@
 from contextlib import ExitStack, contextmanager, nullcontext
 
+from typing import Tuple
+
 import torch
 from torch import einsum, nn
 import torch.nn.functional as F
@@ -51,7 +53,7 @@ class Residual(nn.Module):
     def forward(self, x, **kwargs):
         y = self.fn(x, **kwargs)
 
-        if not y.requires_grad and not x.requires_grad:
+        if not any([t.requires_grad for t in (x, y)]):
             return x.add_(y)
 
         return y + x
@@ -96,7 +98,16 @@ class SwiGLU(nn.Module):
 
 
 class ParallelTransformerBlock(nn.Module):
-    def __init__(self, dim, dim_head=64, heads=8, ff_mult=4, lora=True, lora_r=8):
+    def __init__(
+        self,
+        dim,
+        dim_head=64,
+        heads=8,
+        ff_mult=4,
+        lora=True,
+        lora_r=8,
+        lora_scopes: Tuple[str, ...]=('default',)
+    ):
         super().__init__()
         self.norm = LayerNorm(dim)
 
@@ -117,11 +128,15 @@ class ParallelTransformerBlock(nn.Module):
         self.qkv_lora = self.attn_out_lora = None
 
         if lora:
-            self.qkv_lora = nn.ModuleList([
-                LoRA(dim, dim_out, r=lora_r) for dim_out in self.fused_dims[:-1]
-            ])
+            self.qkv_lora = nn.ModuleDict({})
+            self.attn_out_lora = nn.ModuleDict({})
 
-            self.attn_out_lora = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
+            for lora_scope in lora_scopes:
+                self.qkv_lora[lora_scope] = nn.ModuleList([
+                    LoRA(dim, dim_out, r=lora_r) for dim_out in self.fused_dims[:-1]
+                ])
+
+                self.attn_out_lora[lora_scope] = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
 
         # parallel feedforward tail
 
@@ -151,7 +166,12 @@ class ParallelTransformerBlock(nn.Module):
         self.register_buffer("pos_emb", pos_emb, persistent=False)
         return pos_emb
 
-    def forward(self, x, disable_lora = False):
+    def forward(
+        self,
+        x,
+        disable_lora = False,
+        lora_scope = 'default'
+    ):
         """
         einstein notation
         b - batch
@@ -171,7 +191,9 @@ class ParallelTransformerBlock(nn.Module):
         q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
         if exists(self.qkv_lora) and not disable_lora:
-            lq, lk, lv = tuple(lora(x) for lora in self.qkv_lora)
+            assert lora_scope in self.qkv_lora
+
+            lq, lk, lv = tuple(lora(x) for lora in self.qkv_lora[lora_scope])
             q, k, v = (q + lq), (k + lk), (v + lv)
 
         # split heads
@@ -214,7 +236,7 @@ class ParallelTransformerBlock(nn.Module):
         ff_out = self.ff_out(ff)
 
         if exists(self.attn_out_lora) and not disable_lora:
-            attn_out = attn_out + self.attn_out_lora(out)
+            attn_out = attn_out + self.attn_out_lora[lora_scope](out)
 
         return attn_out + ff_out
 
@@ -233,6 +255,7 @@ class PaLM(nn.Module):
         ff_mult=4,
         lora=True,
         lora_r=8,
+        lora_scopes: Tuple[str, ...]=('default',)
     ):
         super().__init__()
         self.dim = dim
@@ -242,7 +265,17 @@ class PaLM(nn.Module):
         self.layers = nn.ModuleList([])
 
         for _ in range(depth):
-            self.layers.append(Residual(ParallelTransformerBlock(dim=dim, dim_head=dim_head, heads=heads, ff_mult=ff_mult, lora=lora, lora_r=lora_r)))
+            block = Residual(ParallelTransformerBlock(
+                dim=dim,
+                dim_head=dim_head,
+                heads=heads,
+                ff_mult=ff_mult,
+                lora=lora,
+                lora_r=lora_r,
+                lora_scopes=lora_scopes
+            ))
+
+            self.layers.append(block)
 
         self.norm = LayerNorm(dim)
         self.to_logits = nn.Linear(dim, num_tokens, bias=False)
@@ -260,13 +293,17 @@ class PaLM(nn.Module):
 
         return set(self.parameters()) - set(self.finetune_parameters())
 
-    def finetune_parameters(self):
+    def finetune_parameters(self, lora_scope = 'default'):
         assert self.lora, 'lora not present on this palm'
 
         loras = []
 
         for layer in self.layers:
-            loras.extend(layer.fn.attn_out_lora.parameters())
+            block = layer.fn
+            assert lora_scope in block.qkv_lora, f'specific fine tuning namespace {lora_scope} not found'
+
+            loras.extend(block.qkv_lora[lora_scope].parameters())
+            loras.extend(block.attn_out_lora[lora_scope].parameters())
 
         return set(loras)
 
@@ -315,7 +352,7 @@ class PaLM(nn.Module):
             x = x + extra_embed
 
         for layer in self.layers:
-            x = layer(x, disable_lora = disable_lora) + x
+            x = layer(x, disable_lora = disable_lora)
 
         x = self.norm(x)
 
