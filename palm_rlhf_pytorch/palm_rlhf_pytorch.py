@@ -8,7 +8,7 @@ import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
-from einops import rearrange, reduce
+from einops import rearrange, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k
@@ -348,6 +348,9 @@ class PaLM(nn.Module):
         if not exists(prompt):
             prompt = torch.randint(0, self.token_emb.weight.shape[0], (1, 1))
             prompt = prompt.to(self.device)
+            return_seq_without_prompt = False
+
+        prompt, leading_dims = pack([prompt], '* n')
 
         n, out = prompt.shape[-1], prompt.clone()
 
@@ -373,8 +376,10 @@ class PaLM(nn.Module):
                         out = out.masked_fill(mask, pad_value)
                         break
 
+        out, = unpack(out, leading_dims, '* n')
+
         if return_seq_without_prompt:
-            return out[:, n:]
+            return out[..., n:]
 
         return out
 
