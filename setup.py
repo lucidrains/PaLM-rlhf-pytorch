@@ -19,6 +19,7 @@ setup(
     'human feedback'
   ],
   install_requires=[
+    'accelerate',
     'beartype',
     'einops>=0.6',
     'torch>=1.6',

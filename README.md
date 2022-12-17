@@ -112,7 +112,7 @@ answer = palm.generate(2048, prompts = prompts[0])
 
 - <a href="https://stability.ai/">Stability.ai</a> for the generous sponsorship to work on cutting edge artificial intelligence research
 
-- <a href="https://huggingface.co/">🤗 Huggingface</a> and <a href="https://carper.ai/">CarperAI</a> for penning the blog post <a href="https://huggingface.co/blog/rlhf">Illustrating Reinforcement Learning from Human Feedback (RLHF)</a>, and the latter also for their accelerate library
+- <a href="https://huggingface.co/">🤗 Huggingface</a> and <a href="https://carper.ai/">CarperAI</a> for penning the blog post <a href="https://huggingface.co/blog/rlhf">Illustrating Reinforcement Learning from Human Feedback (RLHF)</a>, and the latter also for their <a href="https://huggingface.co/docs/accelerate/index">accelerate</a> library
 
 ## Citations
 
