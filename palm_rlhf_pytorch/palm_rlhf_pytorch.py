@@ -1,5 +1,7 @@
+from pathlib import Path
 from contextlib import ExitStack, contextmanager, nullcontext
 
+from beartype import beartype
 from typing import Tuple
 
 import torch
@@ -11,6 +13,8 @@ from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k
 from palm_rlhf_pytorch.lora import LoRA
+
+# functions and decorators
 
 def exists(val):
     return val is not None
@@ -101,12 +105,14 @@ class ParallelTransformerBlock(nn.Module):
     def __init__(
         self,
         dim,
-        dim_head=64,
-        heads=8,
-        ff_mult=4,
-        lora=True,
-        lora_r=8,
-        lora_scopes: Tuple[str, ...]=('default',)
+        dim_head = 64,
+        heads = 8,
+        ff_mult = 4,
+        lora = True,
+        lora_r = 8,
+        lora_scopes: Tuple[str, ...] = ('default',),
+        attn_dropout = 0.,
+        ff_dropout = 0.
     ):
         super().__init__()
         self.norm = LayerNorm(dim)
@@ -138,10 +144,13 @@ class ParallelTransformerBlock(nn.Module):
 
                 self.attn_out_lora[lora_scope] = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
 
+        self.attn_dropout = nn.Dropout(attn_dropout)
+
         # parallel feedforward tail
 
         self.ff_out = nn.Sequential(
             SwiGLU(),
+            nn.Dropout(ff_dropout),
             nn.Linear(ff_inner_dim, dim, bias=False)
         )
 
@@ -197,7 +206,7 @@ class ParallelTransformerBlock(nn.Module):
             q, k, v = (q + lq), (k + lk), (v + lv)
 
         # split heads
-        # they use multi-query single-key-value attention, yet another Noam Shazeer paper
+        # they use multi-query singclasle-key-value attention, yet another Noam Shazeer paper
         # they found no performance loss past a certain scale, and more efficient decoding obviously
         # https://arxiv.org/abs/1911.02150
 
@@ -222,6 +231,7 @@ class ParallelTransformerBlock(nn.Module):
         # attention
 
         attn = sim.softmax(dim=-1)
+        attn = self.attn_dropout(attn)
 
         # aggregate values
 
@@ -242,7 +252,7 @@ class ParallelTransformerBlock(nn.Module):
 
 # transformer
 
-
+@beartype
 class PaLM(nn.Module):
     def __init__(
         self,
@@ -250,12 +260,14 @@ class PaLM(nn.Module):
         dim,
         num_tokens,
         depth,
-        dim_head=64,
-        heads=8,
-        ff_mult=4,
-        lora=True,
-        lora_r=8,
-        lora_scopes: Tuple[str, ...]=('default',)
+        dim_head = 64,
+        heads = 8,
+        ff_mult = 4,
+        lora = True,
+        lora_r = 8,
+        lora_scopes: Tuple[str, ...] = ('default',),
+        attn_dropout = 0.,
+        ff_dropout = 0.
     ):
         super().__init__()
         self.dim = dim
@@ -266,13 +278,15 @@ class PaLM(nn.Module):
 
         for _ in range(depth):
             block = Residual(ParallelTransformerBlock(
-                dim=dim,
-                dim_head=dim_head,
-                heads=heads,
-                ff_mult=ff_mult,
-                lora=lora,
-                lora_r=lora_r,
-                lora_scopes=lora_scopes
+                dim = dim,
+                dim_head = dim_head,
+                heads = heads,
+                ff_mult = ff_mult,
+                lora = lora,
+                lora_r = lora_r,
+                lora_scopes = lora_scopes,
+                attn_dropout = attn_dropout,
+                ff_dropout = ff_dropout
             ))
 
             self.layers.append(block)
@@ -283,6 +297,15 @@ class PaLM(nn.Module):
         self.to_logits.weight = self.token_emb.weight
 
         nn.init.normal_(self.token_emb.weight, std=0.02)
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def load(self, path):
+        path = Path(path)
+        assert path.exists()
+        self.load_state_dict(torch.load(str(path)))
 
     # researcher train palm parameters first
     # before finetuning
@@ -311,15 +334,22 @@ class PaLM(nn.Module):
 
     def generate(
         self,
-        prime,
         seq_len,
+        prompt = None,
         temperature = 1.,
         filter_logits_fn = top_k,
         filter_thres = 0.9,
         trainable = False,
+        pad_value = 0.,
+        eos_token = None,
+        return_seq_without_prompt = True,
         **kwargs
     ):
-        n, out = prime.shape[-1], prime.clone()
+        if not exists(prompt):
+            prompt = torch.randint(0, self.token_emb.weight.shape[0], (1, 1))
+            prompt = prompt.to(self.device)
+
+        n, out = prompt.shape[-1], prompt.clone()
 
         context = multi_context(eval_decorator(self), torch.no_grad) if not trainable else nullcontext
 
@@ -333,7 +363,20 @@ class PaLM(nn.Module):
                 sample = torch.multinomial(probs, 1)
                 out = torch.cat((out, sample), dim=-1)
 
-        return out[:, n:]
+                if exists(eos_token):
+                    is_eos_tokens = (out == eos_token)
+
+                    if is_eos_tokens.any(dim = -1).all():
+                        # mask out everything after the eos tokens
+                        shifted_is_eos_tokens = F.pad(is_eos_tokens, (1, -1))
+                        mask = shifted_is_eos_tokens.float().cumsum(dim = -1) >= 1
+                        out = out.masked_fill(mask, pad_value)
+                        break
+
+        if return_seq_without_prompt:
+            return out[:, n:]
+
+        return out
 
     def forward(
         self,
@@ -370,12 +413,12 @@ class PaLM(nn.Module):
 
 # Reward Model - PaLM with a scalar head
 
+@beartype
 class RewardModel(nn.Module):
     def __init__(
         self,
         palm: PaLM,
-        num_binned_output = 0.,
-        reward_lora_scope = None,
+        num_binned_output = 0.
     ):
         super().__init__()
         self.palm = palm
@@ -393,6 +436,11 @@ class RewardModel(nn.Module):
                 nn.Linear(dim, 1, bias = False),
                 Rearrange('... 1 -> ...')
             )
+
+    def load(self, path):
+        path = Path(path)
+        assert path.exists()
+        self.load_state_dict(torch.load(str(path)))
 
     def finetune_parameters(self, lora_scope='default'):
         return [
@@ -438,6 +486,7 @@ class RewardModel(nn.Module):
 
 # PaLM with actor and critic heads
 
+@beartype
 class ActorWithValueHead(nn.Module):
     def __init__(
         self,
@@ -459,12 +508,12 @@ class ActorWithValueHead(nn.Module):
 
     def actor_parameters(self):
         return [
-            *palm.finetune_parameters(self.actor_lora_scope)
+            *self.palm.finetune_parameters(self.actor_lora_scope)
         ]
 
     def critic_parameters(self):
         return [
-            *palm.finetune_parameters(self.critic_lora_scope),
+            *self.palm.finetune_parameters(self.critic_lora_scope),
             *self.value_head.parameters()
         ]
 
@@ -482,7 +531,6 @@ class ActorWithValueHead(nn.Module):
                 return_embeddings = True,
                 lora_scope = self.critic_lora_scope
             )
-
 
         actions = self.palm.to_logits(actor_embeds)
         values = self.value_head(critic_embeds)
