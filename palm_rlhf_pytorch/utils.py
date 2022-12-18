@@ -3,6 +3,28 @@ import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
+from einops import rearrange
+
+def exists(val):
+    return val is not None
+
+# tensor helpers
+
+def masked_mean(seq, mask = None, dim = 1):
+    if not exists(mask):
+        return seq.mean(dim = dim)
+
+    if seq.ndim == 3:
+        mask = rearrange(mask, 'b n -> b n 1')
+
+    masked_seq = seq.masked_fill(~mask, 0.)
+    numer = masked_seq.sum(dim = dim)
+    denom = mask.sum(dim = dim)
+
+    masked_mean = numer / denom.clamp(min = 1e-3)
+    masked_mean = masked_mean.masked_fill(denom == 0, 0.)
+    return masked_mean
+
 # sampling helpers
 
 def gumbel_noise(t):

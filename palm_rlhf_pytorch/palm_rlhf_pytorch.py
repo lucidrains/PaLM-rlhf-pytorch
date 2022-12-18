@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from einops import rearrange, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
 
-from palm_rlhf_pytorch.utils import top_p, top_k
+from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean
 from palm_rlhf_pytorch.lora import LoRA
 
 # functions and decorators
@@ -462,6 +462,7 @@ class RewardModel(nn.Module):
     def forward(
         self,
         x,
+        mask = None,
         prompt_mask = None,
         labels = None,
         disable_lora=True,
@@ -484,7 +485,7 @@ class RewardModel(nn.Module):
             lora_scope = lora_scope
         )
 
-        pooled = reduce(embeds, 'b n d -> b d', 'mean')
+        pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
 
         if not exists(labels):
@@ -511,8 +512,8 @@ class ActorWithValueHead(nn.Module):
         self.actor_lora_scope = actor_lora_scope
         self.critic_lora_scope = critic_lora_scope
 
+        self.pooled_values = pooled_values
         self.value_head = nn.Sequential(
-            Reduce('b n d -> b d', 'mean') if pooled_values else nn.Identity(),
             nn.Linear(palm.dim, 1),
             Rearrange('... 1 -> ...')
         )
@@ -528,7 +529,11 @@ class ActorWithValueHead(nn.Module):
             *self.value_head.parameters()
         ]
 
-    def forward(self, x):
+    def forward(
+        self,
+        x,
+        mask = None
+    ):
         actor_embeds = self.palm(
             x,
             return_embedding = True,
@@ -544,6 +549,10 @@ class ActorWithValueHead(nn.Module):
             )
 
         actions = self.palm.to_logits(actor_embeds)
+
+        if self.pooled_values:
+            critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
+
         values = self.value_head(critic_embeds)
 
         return actions, values

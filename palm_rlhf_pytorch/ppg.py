@@ -15,12 +15,13 @@ from torch.utils.data import Dataset, DataLoader
 
 from einops import rearrange
 
-
 from palm_rlhf_pytorch.palm_rlhf_pytorch import (
     PaLM,
     ActorWithValueHead,
     RewardModel
 )
+
+from palm_rlhf_pytorch.utils import masked_mean
 
 # data
 
@@ -56,8 +57,20 @@ def log(t, eps = 1e-20):
 def get_log_prob(prob, indices, dim = -1):
     return log(prob.gather(dim, indices))
 
-def get_entropy(prob, dim = -1):
-    return -torch.sum(prob * log(prob), dim = dim)
+def get_entropy(prob, dim = -1, mask = None):
+    entropies = (prob * log(prob)).sum(dim = -1)
+    return masked_mean(entropies, mask = mask).mean()
+
+def kl_div_with_maybe_mask(prob1, prob2, mask = None):
+    """
+    need to account for variable sequence lengths, therefore not using the built-in functional version
+    """
+    kl_divs = (prob1 * (log(prob2) - log(prob1))).sum(dim = -1)
+
+    if not exists(mask):
+        return kl_divs.mean()
+
+    return masked_mean(kl_divs, mask).mean()
 
 def update_network_(loss, optimizer):
     optimizer.zero_grad()
