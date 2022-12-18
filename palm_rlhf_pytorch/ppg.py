@@ -99,8 +99,6 @@ class RLHFTrainer(nn.Module):
         actor_lr = 1e-4,
         critic_lr = 1e-4,
         betas = (0.9, 0.999),
-        lam = 0.95,
-        gamma = 0.99,
         eps_clip = 0.2,
         value_clip = 0.4,
         beta_s = .01,
@@ -143,8 +141,6 @@ class RLHFTrainer(nn.Module):
 
         # ppo hyperparams
 
-        self.lam = lam
-        self.gamma = gamma
         self.eps_clip = eps_clip
         self.value_clip = value_clip
         self.beta_s = beta_s
@@ -272,7 +268,8 @@ class RLHFTrainer(nn.Module):
                 action_probs, policy_values = self.actor(states)
                 action_logprobs = action_probs.log()
 
-                # policy network loss copmoses of both the kl div loss as well as the auxiliary loss
+                # policy network loss composes of both the kl div loss as well as the auxiliary loss
+
                 aux_loss = clipped_value_loss(policy_values, rewards, old_values, self.value_clip)
                 loss_kl = F.kl_div(action_logprobs, old_action_probs, reduction='batchmean')
                 policy_loss = aux_loss + loss_kl
