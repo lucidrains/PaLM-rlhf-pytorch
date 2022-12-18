@@ -163,8 +163,7 @@ class RLHFTrainer(nn.Module):
     def learn(
         self,
         memories: Deque[Memory],
-        aux_memories: Deque[AuxMemory],
-        next_state
+        aux_memories: Deque[AuxMemory]
     ):
         # retrieve and prepare data from memory for training
 
@@ -180,22 +179,7 @@ class RLHFTrainer(nn.Module):
             actions.append(torch.tensor(mem.action))
             old_log_probs.append(mem.action_log_prob)
             rewards.append(mem.reward)
-            masks.append(1 - float(mem.done))
             values.append(mem.value)
-
-        # calculate generalized advantage estimate
-
-        self.eps_clip = ep
-        next_state = torch.from_numpy(next_state).to(device)
-        next_value = self.critic(next_state).detach()
-        values = values + [next_value]
-
-        returns = []
-        gae = 0
-        for i in reversed(range(len(rewards))):
-            delta = rewards[i] + self.gamma * values[i + 1] * masks[i] - values[i]
-            gae = delta + self.gamma * self.lam * masks[i] * gae
-            returns.insert(0, gae + values[i])
 
         # convert values to torch tensors
 
@@ -203,10 +187,9 @@ class RLHFTrainer(nn.Module):
 
         states = to_torch_tensor(states)
         actions = to_torch_tensor(actions)
-        old_values = to_torch_tensor(values[:-1])
+        old_values = to_torch_tensor(values)
         old_log_probs = to_torch_tensor(old_log_probs)
-
-        rewards = torch.tensor(returns).float().to(device)
+        rewards = torch.tensor(rewards).float().to(device)
 
         # store state and target values to auxiliary memory buffer for later training
 
@@ -215,7 +198,13 @@ class RLHFTrainer(nn.Module):
 
         # prepare dataloader for policy phase training
 
-        dl = create_shuffled_dataloader([states, actions, old_log_probs, rewards, old_values], self.minibatch_size)
+        dl = create_shuffled_dataloader([
+            states,
+            actions,
+            old_log_probs,
+            rewards,
+            old_values
+        ], self.minibatch_size)
 
         # policy phase training, similar to original PPO
 
@@ -268,7 +257,12 @@ class RLHFTrainer(nn.Module):
 
         # prepared dataloader for auxiliary phase training
 
-        dl = create_shuffled_dataloader([states, old_action_probs, rewards, old_values], self.minibatch_size)
+        dl = create_shuffled_dataloader([
+            states,
+            old_action_probs,
+            rewards,
+            old_values
+        ], self.minibatch_size)
 
         # the proposed auxiliary phase training
         # where the value is distilled into the policy network, while making sure the policy network does not change the action predictions (kl div loss)
