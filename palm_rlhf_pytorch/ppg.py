@@ -48,8 +48,13 @@ def create_dataloader(data, batch_size, shuffle = True, **kwargs):
 def exists(val):
     return val is not None
 
-def normalize(t, eps = 1e-5):
-    return (t - t.mean()) / t.std().clamp(min = eps)
+def normalize(t, eps = 1e-5, dim = None):
+    kwargs = dict()
+    if exists(dim):
+        kwargs = dict(dim = dim, keepdim = True)
+
+    var = torch.var(t, unbiased = False, **kwargs)
+    return (t - t.mean(**kwargs)) * var.clamp(min = eps).rsqrt()
 
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
