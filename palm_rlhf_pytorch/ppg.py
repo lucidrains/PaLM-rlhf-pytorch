@@ -54,14 +54,14 @@ def normalize(t, eps = 1e-5):
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
-def get_log_prob(prob, indices, dim = -1):
+def log_prob(prob, indices, dim = -1):
     return log(prob.gather(dim, indices))
 
-def get_entropy(prob, dim = -1, mask = None):
+def masked_entropy(prob, dim = -1, mask = None):
     entropies = (prob * log(prob)).sum(dim = -1)
     return masked_mean(entropies, mask = mask).mean()
 
-def kl_div_with_maybe_mask(prob1, prob2, mask = None):
+def masked_kl_div(prob1, prob2, mask = None):
     """
     need to account for variable sequence lengths, therefore not using the built-in functional version
     """
@@ -333,7 +333,7 @@ class RLHFTrainer(nn.Module):
                     return_value = True,
                 )
 
-                action_log_prob = get_log_prob(action_prob, action)
+                action_log_prob = log_prob(action_prob, action)
 
                 # get reward as given by supervised trained reward model
 
