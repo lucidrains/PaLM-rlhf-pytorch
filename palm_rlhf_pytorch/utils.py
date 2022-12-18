@@ -10,6 +10,9 @@ def exists(val):
 
 # tensor helpers
 
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
 def masked_mean(seq, mask = None, dim = 1):
     if not exists(mask):
         return seq.mean(dim = dim)

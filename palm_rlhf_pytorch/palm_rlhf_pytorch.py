@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from einops import rearrange, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
 
-from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean
+from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean, gumbel_sample
 from palm_rlhf_pytorch.lora import LoRA
 
 # functions and decorators
@@ -364,13 +364,16 @@ class PaLM(nn.Module):
 
         with context:
             for _ in range(seq_len):
-                logits = self.forward(out, **kwargs)
+                logits, embeds = self.forward(out, return_logits_with_embedding = True, **kwargs)
+                logits, embeds = logits[:, -1], embeds[:, -1]
 
-                filtered_logits = filter_logits_fn(logits[:, -1], thres = filter_thres)
-                probs = F.softmax(filtered_logits / temperature, dim=-1)
+                if exists(filter_logits_fn):
+                    logits = filter_logits_fn(logits, thres = filter_thres)
 
-                sample = torch.multinomial(probs, 1)
-                out = torch.cat((out, sample), dim=-1)
+                logits = logits / temperature
+
+                sample = gumbel_sample(logits, dim=-1)
+                out, _ = pack([out, sample], 'b *')
 
                 if exists(eos_token):
                     is_eos_tokens = (out == eos_token)
@@ -385,7 +388,7 @@ class PaLM(nn.Module):
         out, = unpack(out, leading_dims, '* n')
 
         if return_seq_without_prompt:
-            return out[..., n:]
+            out = out[..., n:]
 
         return out
 
@@ -396,7 +399,8 @@ class PaLM(nn.Module):
         disable_lora = False,
         lora_scope = 'default',
         extra_embed = None,
-        return_embedding = False
+        return_only_embedding = False,
+        return_logits_with_embedding = False
     ):
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
@@ -409,15 +413,17 @@ class PaLM(nn.Module):
         for layer in self.layers:
             x = layer(x, disable_lora = disable_lora, lora_scope = lora_scope)
 
-        x = self.norm(x)
+        embeds = self.norm(x)
 
-        if return_embedding:
-            return x
+        if return_only_embedding:
+            return embeds
 
         logits = self.to_logits(x)
 
+        ret = (logits, embeds) if return_logits_with_embedding else logits
+
         if not return_loss:
-            return logits
+            return ret
 
         logits = rearrange(logits, 'b n c -> b c n')
         return F.cross_entropy(logits, labels)
@@ -480,7 +486,7 @@ class RewardModel(nn.Module):
         embeds = self.palm(
             x,
             extra_embed = extra_embed,
-            return_embedding = True,
+            return_only_embedding = True,
             disable_lora = disable_lora,
             lora_scope = lora_scope
         )
