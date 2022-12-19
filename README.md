@@ -115,6 +115,7 @@ answer = palm.generate(2048, prompts = prompts[0])
 - [ ] clone base transformer with separate lora for critic
 - [ ] add huggingface accelerate and test out wandb instrumentation
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
+- [ ] test the system using a pretrained sentiment network as reward model
 
 ## Appreciation
 
