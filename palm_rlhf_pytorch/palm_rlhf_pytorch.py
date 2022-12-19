@@ -454,12 +454,12 @@ class RewardModel(nn.Module):
         self.palm = palm
         dim = palm.dim
 
-        self.binned_output = num_binned_output > 0
+        self.binned_output = num_binned_output > 1
 
         self.prompt_embed = nn.Parameter(torch.zeros(1, 1, dim))
         self.response_embed = nn.Parameter(torch.zeros(1, 1, dim))
 
-        if self.binned_output > 0:
+        if self.binned_output:
             self.to_pred = nn.Linear(dim, num_binned_output)
         else:
             self.to_pred = nn.Sequential(
@@ -484,6 +484,8 @@ class RewardModel(nn.Module):
         mask = None,
         prompt_mask = None,
         labels = None,
+        sample_from_binned = False,
+        sample_temperature = 1.,
         disable_lora=True,
         lora_scope='default'
     ):
@@ -510,6 +512,11 @@ class RewardModel(nn.Module):
 
         pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
+
+        if sample_from_binned:
+            assert self.binned_output
+            assert not exists(labels)
+            pred = gumbel_sample(pred, temperature = sample_temperature, dim = -1)
 
         if not exists(labels):
             return pred
@@ -633,6 +640,6 @@ class ActorWithValueHead(nn.Module):
         if self.pooled_values:
             critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
 
-        values = self.value_head(critic_embeds)
+        values = self.value_head(critic_embeds.detach())
 
         return action_logits, values
