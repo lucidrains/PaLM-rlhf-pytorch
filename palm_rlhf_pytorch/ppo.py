@@ -31,6 +31,7 @@ Memory = namedtuple('Memory', [
     'sequence',
     'prompt_mask',
     'mask',
+    'action_prob',
     'action_log_prob',
     'reward',
     'value'
@@ -113,7 +114,8 @@ class RLHFTrainer(nn.Module):
         beta_s = .01,
         pad_value = 0.,
         minibatch_size = 16,
-        epochs = 1
+        epochs = 1,
+        kl_div_loss_weight = 0.1 # between old action probs and new action probs - not sure what the right value is
     ):
         super().__init__()
 
@@ -149,6 +151,7 @@ class RLHFTrainer(nn.Module):
 
         self.epochs = epochs
         self.minibatch_size = minibatch_size
+        self.kl_div_loss_weight = kl_div_loss_weight
 
         # optimizers
 
@@ -181,6 +184,7 @@ class RLHFTrainer(nn.Module):
         sequences = []
         prompt_masks = []
         masks = []
+        action_probs = []
         old_log_probs = []
         rewards = []
         values = []
@@ -189,6 +193,7 @@ class RLHFTrainer(nn.Module):
             sequence,
             prompt_mask,
             mask,
+            action_prob,
             action_log_prob,
             reward,
             value
@@ -196,13 +201,14 @@ class RLHFTrainer(nn.Module):
             sequences.append(sequence)
             prompt_masks.append(prompt_mask)
             masks.append(mask)
+            action_probs.append(action_prob)
             old_log_probs.append(action_log_prob)
             rewards.append(reward)
             values.append(value)
 
         # stack all tensors
 
-        sequences, prompt_masks, masks, old_log_probs, rewards, values = map(partial(pad_sequence, batch_first = True), (sequences, prompt_masks, masks, old_log_probs, rewards, values))
+        sequences, prompt_masks, masks, action_probs, old_log_probs, rewards, values = map(partial(pad_sequence, batch_first = True), (sequences, prompt_masks, masks, action_probs, old_log_probs, rewards, values))
 
         # prepare dataloader for policy phase training
 
@@ -210,6 +216,7 @@ class RLHFTrainer(nn.Module):
             sequence,
             prompt_mask,
             mask,
+            action_probs,
             action_log_prob,
             reward,
             value
@@ -224,6 +231,7 @@ class RLHFTrainer(nn.Module):
                 sequences,
                 prompt_masks,
                 masks,
+                old_action_probs,
                 old_log_probs,
                 rewards,
                 old_values
@@ -238,7 +246,14 @@ class RLHFTrainer(nn.Module):
                 action_probs = action_logits.softmax(dim = -1)
                 action_log_probs = log_prob(action_probs, sequences[..., None])
 
+                # calculate entropies, taking into account which part of the sequence is actually an action
+
                 entropies = masked_entropy(action_probs, mask = action_masks)
+
+                # calculate kl div between old action probs and new ones, taking into account which part of the sequence is action or not
+
+                action_len = old_action_probs.shape[-2]
+                kl_div_loss = masked_kl_div(action_probs[:, -action_len:], old_action_probs, mask = action_masks[:, -action_len:]) * self.kl_div_loss_weight
 
                 # calculate clipped surrogate objective, classic PPO loss
 
@@ -340,6 +355,7 @@ class RLHFTrainer(nn.Module):
                     detach_to_cpu_(sequence),
                     detach_to_cpu_(prompt_mask),
                     detach_to_cpu_(mask),
+                    detach_to_cpu_(action_prob),
                     detach_to_cpu_(action_log_prob),
                     detach_to_cpu_(reward[None]),
                     detach_to_cpu_(value[None])
