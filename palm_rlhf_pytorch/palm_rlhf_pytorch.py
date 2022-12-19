@@ -603,7 +603,6 @@ class ActorWithValueHead(nn.Module):
         )
 
         action_logits = rearrange(action_logits, '1 ... -> ...')
-        action_logits = action_logits[-action_len:]
 
         value = rearrange(value, '1 ->')
 

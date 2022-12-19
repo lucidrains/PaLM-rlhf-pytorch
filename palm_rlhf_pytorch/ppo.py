@@ -217,7 +217,7 @@ class RLHFTrainer(nn.Module):
             prompt_mask,
             mask,
             action_probs,
-            action_log_prob,
+            old_log_probs,
             reward,
             value
         ], self.minibatch_size, device = self.device)
@@ -243,8 +243,11 @@ class RLHFTrainer(nn.Module):
                     mask = action_masks
                 )
 
+                action_len = old_log_probs.shape[-2]
+
                 action_probs = action_logits.softmax(dim = -1)
                 action_log_probs = log_prob(action_probs, sequences[..., None])
+                action_log_probs = action_log_probs[:, -action_len:]
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
 
@@ -252,8 +255,7 @@ class RLHFTrainer(nn.Module):
 
                 # calculate kl div between old action probs and new ones, taking into account which part of the sequence is action or not
 
-                action_len = old_action_probs.shape[-2]
-                kl_div_loss = masked_kl_div(action_probs[:, -action_len:], old_action_probs, mask = action_masks[:, -action_len:]) * self.kl_div_loss_weight
+                kl_div_loss = masked_kl_div(action_probs, old_action_probs, mask = action_masks) * self.kl_div_loss_weight
 
                 # calculate clipped surrogate objective, classic PPO loss
 
@@ -262,6 +264,8 @@ class RLHFTrainer(nn.Module):
                 surr1 = ratios * advantages
                 surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
                 policy_loss = - torch.min(surr1, surr2) - self.beta_s * entropies
+
+                # update actor
 
                 policy_loss.mean().backward()
                 self.actor_optim.step()
