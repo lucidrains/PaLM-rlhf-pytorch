@@ -1,6 +1,8 @@
 from pathlib import Path
+from collections import namedtuple
 from contextlib import ExitStack, contextmanager, nullcontext
 
+from tqdm import tqdm
 from beartype import beartype
 from typing import Tuple
 
@@ -18,6 +20,14 @@ from palm_rlhf_pytorch.lora import LoRA
 
 def exists(val):
     return val is not None
+
+def identity(t, *args, **kwargs):
+    return t
+
+def safe_cat(acc, t, dim = 1):
+    if not exists(acc):
+        return t
+    return torch.cat((acc, t), dim = dim)
 
 @contextmanager
 def multi_context(*cms):
@@ -278,6 +288,7 @@ class PaLM(nn.Module):
         self.dim = dim
         self.lora = lora
 
+        self.num_tokens = num_tokens
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.layers = nn.ModuleList([])
 
@@ -349,10 +360,11 @@ class PaLM(nn.Module):
         pad_value = 0.,
         eos_token = None,
         return_seq_without_prompt = True,
+        use_tqdm = False,
         **kwargs
     ):
         if not exists(prompt):
-            prompt = torch.randint(0, self.token_emb.weight.shape[0], (1, 1))
+            prompt = torch.randint(0, self.num_tokens, (1, 1))
             prompt = prompt.to(self.device)
             return_seq_without_prompt = False
 
@@ -363,16 +375,17 @@ class PaLM(nn.Module):
         context = multi_context(eval_decorator(self), torch.no_grad) if not trainable else nullcontext
 
         with context:
-            for _ in range(seq_len):
+            wrapper_fn = identity if not use_tqdm else tqdm
+            sample_num_times = max(1, seq_len - prompt.shape[-1])
+
+            for _ in wrapper_fn(range(sample_num_times)):
                 logits, embeds = self.forward(out, return_logits_with_embedding = True, **kwargs)
                 logits, embeds = logits[:, -1], embeds[:, -1]
 
                 if exists(filter_logits_fn):
                     logits = filter_logits_fn(logits, thres = filter_thres)
 
-                logits = logits / temperature
-
-                sample = gumbel_sample(logits, dim=-1)
+                sample = gumbel_sample(logits, temperature = temperature, dim = -1)
                 out, _ = pack([out, sample], 'b *')
 
                 if exists(eos_token):
@@ -475,13 +488,17 @@ class RewardModel(nn.Module):
         lora_scope='default'
     ):
         extra_embed = None
+
+        # reward model should have an understanding of which section is prompt, and which section is response
+
         if exists(prompt_mask):
-            # reward model should have an understanding of which section is prompt, and which section is response
             extra_embed = torch.where(
                 rearrange(prompt_mask, 'b n -> b n 1'),
                 self.prompt_embed,
                 self.response_embed
             )
+
+        # get embeddings from palm
 
         embeds = self.palm(
             x,
@@ -503,6 +520,15 @@ class RewardModel(nn.Module):
         return F.cross_entropy(pred, labels)
 
 # PaLM with actor and critic heads
+
+PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
+    'actions',
+    'sequence',
+    'mask',
+    'prompt_mask',
+    'action_logits',
+    'values'
+])
 
 @beartype
 class ActorWithValueHead(nn.Module):
@@ -535,6 +561,54 @@ class ActorWithValueHead(nn.Module):
             *self.value_head.parameters()
         ]
 
+    def generate(
+        self,
+        state,
+        max_seq_len,
+        eos_token = None,
+        **kwargs
+    ):
+        assert state.ndim == 1, 'only allow for sampling one sequence at a time for now'
+
+        actions = self.palm.generate(
+            max_seq_len,
+            prompt = state,       
+            eos_token = eos_token,     
+            lora_scope = self.actor_lora_scope,
+            use_tqdm = True,
+            **kwargs
+        )
+
+        sequence = torch.cat((state, actions), dim = -1)
+        action_len = actions.shape[-1]
+        state_len = state.shape[-1]
+
+        prompt_mask = torch.arange(sequence.shape[-1], device = state.device) < state_len
+
+        mask = None
+        if exists(eos_token):
+            mask = ((sequence == eos_token).cumsum(dim = -1) == 0)
+            mask = F.pad(mask, (1, -1), value = True) # include eos token
+
+        action_logits, value = self.forward(
+            rearrange(sequence, 'n -> 1 n'),
+            mask = (rearrange(mask, 'n -> 1 n') if exists(mask) else None)
+        )
+
+        action_logits = rearrange(action_logits, '1 ... -> ...')
+        action_logits = action_logits[-action_len:]
+
+        value = rearrange(value, '1 ->')
+
+        return PPOActionCriticReturn(
+            actions,
+            sequence,
+            mask,
+            prompt_mask,
+            action_logits,
+            value
+        )
+
     def forward(
         self,
         x,
@@ -542,7 +616,7 @@ class ActorWithValueHead(nn.Module):
     ):
         actor_embeds = self.palm(
             x,
-            return_embedding = True,
+            return_only_embedding = True,
             lora_scope = self.actor_lora_scope
         )
 
@@ -550,15 +624,15 @@ class ActorWithValueHead(nn.Module):
         if self.actor_lora_scope != self.critic_lora_scope:
             critic_embeds = self.palm(
                 x,
-                return_embeddings = True,
+                return_only_embedding = True,
                 lora_scope = self.critic_lora_scope
             )
 
-        actions = self.palm.to_logits(actor_embeds)
+        action_logits = self.palm.to_logits(actor_embeds)
 
         if self.pooled_values:
             critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
 
         values = self.value_head(critic_embeds)
 
-        return actions, values
+        return action_logits, values

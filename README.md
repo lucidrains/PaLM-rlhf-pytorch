@@ -137,15 +137,6 @@ answer = palm.generate(2048, prompts = prompts[0])
 ```
 
 ```bibtex
-@inproceedings{Cobbe2020PhasicPG,
-    title     = {Phasic Policy Gradient},
-    author    = {Karl Cobbe and Jacob Hilton and Oleg Klimov and John Schulman},
-    booktitle = {International Conference on Machine Learning},
-    year      = {2020}
-}
-```
-
-```bibtex
 @article{Hu2021LoRALA,
     title   = {LoRA: Low-Rank Adaptation of Large Language Models},
     author  = {Edward J. Hu and Yelong Shen and Phillip Wallis and Zeyuan Allen-Zhu and Yuanzhi Li and Shean Wang and Weizhu Chen},
