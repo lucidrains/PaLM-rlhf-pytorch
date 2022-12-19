@@ -95,6 +95,7 @@ def clipped_value_loss(values, rewards, old_values, clip):
 
 # rlhf trainer
 
+@beartype
 class RLHFTrainer(nn.Module):
     def __init__(
         self,

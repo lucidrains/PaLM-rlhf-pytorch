@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 from collections import namedtuple
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -45,7 +46,6 @@ def eval_decorator(model):
 
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
-
 
 class LayerNorm(nn.Module):
     def __init__(self, dim):
@@ -119,9 +119,6 @@ class ParallelTransformerBlock(nn.Module):
         causal = True,
         heads = 8,
         ff_mult = 4,
-        lora = True,
-        lora_r = 8,
-        lora_scopes: Tuple[str, ...] = ('default',),
         attn_dropout = 0.,
         ff_dropout = 0.
     ):
@@ -141,22 +138,6 @@ class ParallelTransformerBlock(nn.Module):
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
 
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
-
-        # fine tuning parameters
-
-        self.qkv_lora = self.attn_out_lora = None
-
-        if lora:
-            self.qkv_lora = nn.ModuleDict({})
-            self.attn_out_lora = nn.ModuleDict({})
-
-            for lora_scope in lora_scopes:
-                self.qkv_lora[lora_scope] = nn.ModuleList([
-                    LoRA(dim, dim_out, r=lora_r) for dim_out in self.fused_dims[:-1]
-                ])
-
-                self.attn_out_lora[lora_scope] = LoRA(attn_inner_dim, dim, r=lora_r) if lora else None
-
         self.attn_dropout = nn.Dropout(attn_dropout)
 
         # parallel feedforward tail
@@ -191,8 +172,7 @@ class ParallelTransformerBlock(nn.Module):
     def forward(
         self,
         x,
-        disable_lora = False,
-        lora_scope = 'default'
+        finetune_modules = None
     ):
         """
         einstein notation
@@ -212,11 +192,21 @@ class ParallelTransformerBlock(nn.Module):
 
         q, k, v, ff = self.fused_attn_ff_proj(x).split(self.fused_dims, dim=-1)
 
-        if exists(self.qkv_lora) and not disable_lora:
-            assert lora_scope in self.qkv_lora
+        # finetune loras
 
-            lq, lk, lv = tuple(lora(x) for lora in self.qkv_lora[lora_scope])
-            q, k, v = (q + lq), (k + lk), (v + lv)
+        lora_q = lora_k = lora_v = lora_o = None
+
+        if exists(finetune_modules):
+            lora_q, lora_k, lora_v, lora_o = finetune_modules
+
+        if exists(lora_q):
+            q = q + lora_q(x)
+
+        if exists(lora_k):
+            k = k + lora_k(x)
+
+        if exists(lora_v):
+            v = v + lora_v(x)
 
         # split heads
         # they use multi-query singclasle-key-value attention, yet another Noam Shazeer paper
@@ -259,8 +249,8 @@ class ParallelTransformerBlock(nn.Module):
 
         ff_out = self.ff_out(ff)
 
-        if exists(self.attn_out_lora) and not disable_lora:
-            attn_out = attn_out + self.attn_out_lora[lora_scope](out)
+        if exists(lora_o):
+            attn_out = attn_out + lora_o(out)
 
         return attn_out + ff_out
 
@@ -278,17 +268,17 @@ class PaLM(nn.Module):
         dim_head = 64,
         heads = 8,
         ff_mult = 4,
-        lora = True,
-        lora_r = 8,
-        lora_scopes: Tuple[str, ...] = ('default',),
         attn_dropout = 0.,
-        ff_dropout = 0.
+        ff_dropout = 0.,
+        lora_r = 8,
+        finetune_scopes = tuple()
     ):
         super().__init__()
         self.dim = dim
-        self.lora = lora
-
+        self.dim_head = dim_head
+        self.heads = heads
         self.num_tokens = num_tokens
+
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.layers = nn.ModuleList([])
 
@@ -299,9 +289,6 @@ class PaLM(nn.Module):
                 dim_head = dim_head,
                 heads = heads,
                 ff_mult = ff_mult,
-                lora = lora,
-                lora_r = lora_r,
-                lora_scopes = lora_scopes,
                 attn_dropout = attn_dropout,
                 ff_dropout = ff_dropout
             ))
@@ -315,6 +302,14 @@ class PaLM(nn.Module):
 
         nn.init.normal_(self.token_emb.weight, std=0.02)
 
+        # fine tuning related
+
+        self.lora_r = lora_r
+        self.finetune_modules = nn.ModuleDict({})
+
+        for scope in finetune_scopes:
+            self.add_finetune_params(scope)
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -324,28 +319,34 @@ class PaLM(nn.Module):
         assert path.exists()
         self.load_state_dict(torch.load(str(path)))
 
+    def add_finetune_params(self, scope):
+        assert scope not in self.finetune_modules, f'finetune scope {scope} already found'
+        dim, dim_head, heads, r = self.dim, self.dim_head, self.heads, self.lora_r
+
+        q_inner_dim = heads * dim_head
+        kv_inner_dim = dim_head
+
+        lora_modules = nn.ModuleList([])
+
+        for _ in range(len(self.layers)):
+            lora_modules.append(nn.ModuleList([
+                LoRA(dim, q_inner_dim, r = r),   # queries
+                LoRA(dim, kv_inner_dim, r = r),  # keys
+                LoRA(dim, kv_inner_dim, r = r),  # values
+                LoRA(q_inner_dim, dim, r = r)    # wo
+            ]))
+
+        self.finetune_modules[scope] = lora_modules
+
     # researcher train palm parameters first
     # before finetuning
 
     def palm_parameters(self):
-        if not self.lora:
-            return self.parameters()
+        return set(self.parameters()) - set(self.finetune_modules.parameters())
 
-        return set(self.parameters()) - set(self.finetune_parameters())
-
-    def finetune_parameters(self, lora_scope = 'default'):
-        assert self.lora, 'lora not present on this palm'
-
-        loras = []
-
-        for layer in self.layers:
-            block = layer.fn
-            assert lora_scope in block.qkv_lora, f'specific fine tuning namespace {lora_scope} not found'
-
-            loras.extend(block.qkv_lora[lora_scope].parameters())
-            loras.extend(block.attn_out_lora[lora_scope].parameters())
-
-        return set(loras)
+    def finetune_parameters(self, scope = 'default'):
+        assert scope in self.finetune_modules, f'finetune parameters of scope {scope} not found'
+        return self.finetune_modules[scope].parameters()
 
     # generate function
 
@@ -410,7 +411,7 @@ class PaLM(nn.Module):
         x,
         return_loss = False,
         disable_lora = False,
-        lora_scope = 'default',
+        finetune_scope = None,
         extra_embed = None,
         return_only_embedding = False,
         return_logits_with_embedding = False
@@ -423,8 +424,14 @@ class PaLM(nn.Module):
         if exists(extra_embed):
             x = x + extra_embed
 
-        for layer in self.layers:
-            x = layer(x, disable_lora = disable_lora, lora_scope = lora_scope)
+        if exists(finetune_scope):
+            assert finetune_scope in self.finetune_modules
+            finetune_modules = self.finetune_modules[finetune_scope]
+        else:
+            finetune_modules = ((None,) * len(self.layers))
+
+        for layer, finetune_modules in zip(self.layers, finetune_modules):
+            x = layer(x, finetune_modules = None)
 
         embeds = self.norm(x)
 
@@ -448,10 +455,15 @@ class RewardModel(nn.Module):
     def __init__(
         self,
         palm: PaLM,
-        num_binned_output = 0.
+        num_binned_output = 0.,
+        reward_lora_scope = 'reward'
     ):
         super().__init__()
-        self.palm = palm
+        self.palm = copy.deepcopy(palm)
+
+        self.palm.add_finetune_params(reward_lora_scope)
+        self.reward_lora_scope = reward_lora_scope
+
         dim = palm.dim
 
         self.binned_output = num_binned_output > 1
@@ -472,10 +484,10 @@ class RewardModel(nn.Module):
         assert path.exists()
         self.load_state_dict(torch.load(str(path)))
 
-    def finetune_parameters(self, lora_scope='default'):
+    def finetune_parameters(self):
         return [
             *self.to_pred.parameters(),
-            *palm.finetune_parameters(lora_scope=lora_scope)
+            *palm.finetune_parameters(self.reward_lora_scope)
         ]
 
     def forward(
@@ -486,8 +498,7 @@ class RewardModel(nn.Module):
         labels = None,
         sample_from_binned = False,
         sample_temperature = 1.,
-        disable_lora=True,
-        lora_scope='default'
+        disable_lora = False
     ):
         extra_embed = None
 
@@ -507,7 +518,7 @@ class RewardModel(nn.Module):
             extra_embed = extra_embed,
             return_only_embedding = True,
             disable_lora = disable_lora,
-            lora_scope = lora_scope
+            finetune_scope = self.reward_lora_scope
         )
 
         pooled = masked_mean(embeds, mask, dim = 1)
@@ -543,11 +554,16 @@ class ActorWithValueHead(nn.Module):
         self,
         palm: PaLM,
         pooled_values = False,
-        actor_lora_scope = 'default',
-        critic_lora_scope = 'default',
+        actor_lora_scope = 'actor',
+        critic_lora_scope = 'critic',
     ):
         super().__init__()
-        self.palm = palm
+        self.actor_palm = palm
+        self.critic_palm = copy.deepcopy(palm)
+
+        self.actor_palm.add_finetune_params(actor_lora_scope)
+        self.critic_palm.add_finetune_params(critic_lora_scope)
+
         self.actor_lora_scope = actor_lora_scope
         self.critic_lora_scope = critic_lora_scope
 
@@ -559,12 +575,12 @@ class ActorWithValueHead(nn.Module):
 
     def actor_parameters(self):
         return [
-            *self.palm.finetune_parameters(self.actor_lora_scope)
+            *self.actor_palm.finetune_parameters(self.actor_lora_scope)
         ]
 
     def critic_parameters(self):
         return [
-            *self.palm.finetune_parameters(self.critic_lora_scope),
+            *self.critic_palm.finetune_parameters(self.critic_lora_scope),
             *self.value_head.parameters()
         ]
 
@@ -577,11 +593,11 @@ class ActorWithValueHead(nn.Module):
     ):
         assert state.ndim == 1, 'only allow for sampling one sequence at a time for now'
 
-        actions = self.palm.generate(
+        actions = self.actor_palm.generate(
             max_seq_len,
             prompt = state,       
             eos_token = eos_token,     
-            lora_scope = self.actor_lora_scope,
+            finetune_scope = self.actor_lora_scope,
             use_tqdm = True,
             **kwargs
         )
@@ -620,25 +636,23 @@ class ActorWithValueHead(nn.Module):
         x,
         mask = None
     ):
-        actor_embeds = self.palm(
+        actor_embeds = self.actor_palm(
             x,
             return_only_embedding = True,
-            lora_scope = self.actor_lora_scope
+            finetune_scope = self.actor_lora_scope
+        )        
+
+        action_logits = self.actor_palm.to_logits(actor_embeds)
+
+        critic_embeds = self.critic_palm(
+            x,
+            return_only_embedding = True,
+            finetune_scope = self.critic_lora_scope
         )
-
-        critic_embeds = actor_embeds
-        if self.actor_lora_scope != self.critic_lora_scope:
-            critic_embeds = self.palm(
-                x,
-                return_only_embedding = True,
-                lora_scope = self.critic_lora_scope
-            )
-
-        action_logits = self.palm.to_logits(actor_embeds)
 
         if self.pooled_values:
             critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
 
-        values = self.value_head(critic_embeds.detach())
+        values = self.value_head(critic_embeds)
 
         return action_logits, values
