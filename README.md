@@ -110,6 +110,12 @@ trainer.train(num_episodes = 50000)
 answer = palm.generate(2048, prompts = prompts[0])
 ```
 
+## Todo
+
+- [ ] clone base transformer with separate lora for critic
+- [ ] add huggingface accelerate and test out wandb instrumentation
+- [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
+
 ## Appreciation
 
 - <a href="https://stability.ai/">Stability.ai</a> for the generous sponsorship to work on cutting edge artificial intelligence research
