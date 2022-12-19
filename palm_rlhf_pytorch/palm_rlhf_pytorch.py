@@ -5,7 +5,7 @@ from contextlib import ExitStack, contextmanager, nullcontext
 
 from tqdm import tqdm
 from beartype import beartype
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 from torch import einsum, nn
@@ -553,13 +553,18 @@ class ActorWithValueHead(nn.Module):
     def __init__(
         self,
         palm: PaLM,
+        critic_palm: Optional[PaLM] = None,
         pooled_values = False,
         actor_lora_scope = 'actor',
         critic_lora_scope = 'critic',
     ):
         super().__init__()
         self.actor_palm = palm
-        self.critic_palm = copy.deepcopy(palm)
+
+        self.critic_palm = critic_palm
+
+        if not exists(self.critic_palm):
+            self.critic_palm = copy.deepcopy(palm)
 
         self.actor_palm.add_finetune_params(actor_lora_scope)
         self.critic_palm.add_finetune_params(critic_lora_scope)
