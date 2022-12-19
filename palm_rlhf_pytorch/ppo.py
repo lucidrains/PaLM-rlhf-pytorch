@@ -256,7 +256,10 @@ class RLHFTrainer(nn.Module):
 
                 # calculate kl div between old action probs and new ones, taking into account which part of the sequence is action or not
 
-                kl_div_loss = masked_kl_div(action_probs, old_action_probs, mask = action_masks) * self.kl_div_loss_weight
+                kl_div_loss = 0.
+
+                if self.kl_div_loss_weight > 0:
+                    kl_div_loss = masked_kl_div(action_probs, old_action_probs, mask = action_masks) * self.kl_div_loss_weight
 
                 # calculate clipped surrogate objective, classic PPO loss
 
@@ -266,9 +269,13 @@ class RLHFTrainer(nn.Module):
                 surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
                 policy_loss = - torch.min(surr1, surr2) - self.beta_s * entropies
 
+                # combine losses
+
+                loss = policy_loss.mean() + kl_div_loss
+
                 # update actor
 
-                policy_loss.mean().backward()
+                loss.backward()
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
 
