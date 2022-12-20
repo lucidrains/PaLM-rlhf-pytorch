@@ -148,7 +148,7 @@ class ParallelTransformerBlock(nn.Module):
         self.register_buffer("pos_emb", None, persistent=False)
 
     def get_mask(self, n, device):
-        if self.mask is not None and self.mask.shape[-1] >= n:
+        if exists(self.mask) and self.mask.shape[-1] >= n:
             return self.mask[:n, :n]
 
         mask = torch.ones((n, n), device=device, dtype=torch.bool).triu(1)
@@ -156,7 +156,7 @@ class ParallelTransformerBlock(nn.Module):
         return mask
 
     def get_rotary_embedding(self, n, device):
-        if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
+        if exists(self.pos_emb) and self.pos_emb.shape[-2] >= n:
             return self.pos_emb[:n]
 
         pos_emb = self.rotary_emb(n, device=device)
