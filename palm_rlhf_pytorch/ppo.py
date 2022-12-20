@@ -32,8 +32,13 @@ Memory = namedtuple('Memory', [
     'value'
 ])
 
+@beartype
 class ExperienceDataset(Dataset):
-    def __init__(self, data, device = None):
+    def __init__(
+        self,
+        data: List[torch.Tensor],
+        device = None
+    ):
         super().__init__()
         self.data = data
         self.device = device
@@ -190,7 +195,7 @@ class RLHFTrainer(nn.Module):
 
         self.actor_critic.train()
 
-        # policy phase training, similar to original PPO
+        # PPO training
 
         for _ in range(self.epochs):
             for (
