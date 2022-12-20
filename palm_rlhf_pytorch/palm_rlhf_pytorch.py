@@ -30,27 +30,13 @@ def safe_cat(acc, t, dim = 1):
         return t
     return torch.cat((acc, t), dim = dim)
 
-@contextmanager
-def multi_context(*cms):
-    with ExitStack() as stack:
-        yield [stack.enter_context(cls()) for cls in cms]
-
-def eval_context(model):
-    @contextmanager
-    def inner():
-        was_training = model.training
-        model.eval()
-        yield
-        model.train(was_training)
-    return inner
-
-def eval_method_decorator(fn):
-    @contextmanager
+def eval_decorator(fn):
     def inner(self, *args, **kwargs):
-        was_training = model.training
-        model.eval()
-        yield fn(*args, **kwargs)
-        model.train(was_training)
+        was_training = self.training
+        self.eval()
+        out = fn(self, *args, **kwargs)
+        self.train(was_training)
+        return out
     return inner
 
 # normalization
@@ -359,6 +345,8 @@ class PaLM(nn.Module):
 
     # generate function
 
+    @torch.no_grad()
+    @eval_decorator
     def generate(
         self,
         seq_len,
@@ -382,31 +370,28 @@ class PaLM(nn.Module):
 
         n, out = prompt.shape[-1], prompt.clone()
 
-        context = multi_context(eval_context(self), torch.no_grad) if not trainable else nullcontext
+        wrapper_fn = identity if not use_tqdm else tqdm
+        sample_num_times = max(1, seq_len - prompt.shape[-1])
 
-        with context:
-            wrapper_fn = identity if not use_tqdm else tqdm
-            sample_num_times = max(1, seq_len - prompt.shape[-1])
+        for _ in wrapper_fn(range(sample_num_times)):
+            logits, embeds = self.forward(out, return_logits_with_embedding = True, **kwargs)
+            logits, embeds = logits[:, -1], embeds[:, -1]
 
-            for _ in wrapper_fn(range(sample_num_times)):
-                logits, embeds = self.forward(out, return_logits_with_embedding = True, **kwargs)
-                logits, embeds = logits[:, -1], embeds[:, -1]
+            if exists(filter_logits_fn):
+                logits = filter_logits_fn(logits, thres = filter_thres)
 
-                if exists(filter_logits_fn):
-                    logits = filter_logits_fn(logits, thres = filter_thres)
+            sample = gumbel_sample(logits, temperature = temperature, dim = -1)
+            out, _ = pack([out, sample], 'b *')
 
-                sample = gumbel_sample(logits, temperature = temperature, dim = -1)
-                out, _ = pack([out, sample], 'b *')
+            if exists(eos_token):
+                is_eos_tokens = (out == eos_token)
 
-                if exists(eos_token):
-                    is_eos_tokens = (out == eos_token)
-
-                    if is_eos_tokens.any(dim = -1).all():
-                        # mask out everything after the eos tokens
-                        shifted_is_eos_tokens = F.pad(is_eos_tokens, (1, -1))
-                        mask = shifted_is_eos_tokens.float().cumsum(dim = -1) >= 1
-                        out = out.masked_fill(mask, pad_value)
-                        break
+                if is_eos_tokens.any(dim = -1).all():
+                    # mask out everything after the eos tokens
+                    shifted_is_eos_tokens = F.pad(is_eos_tokens, (1, -1))
+                    mask = shifted_is_eos_tokens.float().cumsum(dim = -1) >= 1
+                    out = out.masked_fill(mask, pad_value)
+                    break
 
         out, = unpack(out, leading_dims, '* n')
 
@@ -505,7 +490,7 @@ class RewardModel(nn.Module):
         mask = None,
         prompt_mask = None,
         labels = None,
-        sample_from_binned = False,
+        sample = False,
         sample_temperature = 1.,
         disable_lora = False
     ):
@@ -533,8 +518,7 @@ class RewardModel(nn.Module):
         pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
 
-        if sample_from_binned:
-            assert self.binned_output
+        if sample and self.binned_output:
             assert not exists(labels)
             pred = gumbel_sample(pred, temperature = sample_temperature, dim = -1)
 
@@ -595,8 +579,8 @@ class ActorCritic(nn.Module):
             *self.value_head.parameters()
         ]
 
-    # @eval_decorator
     @torch.no_grad()
+    @eval_decorator
     def generate(
         self,
         state,
