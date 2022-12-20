@@ -112,7 +112,7 @@ answer = trainer.generate(2048, prompt = prompts[0]) # (<= 2048,)
 
 ## Todo
 
-- [ ] clone base transformer with separate lora for critic
+- [x] clone base transformer with separate lora for critic
 - [ ] add huggingface accelerate and test out wandb instrumentation
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
 - [ ] test the system using a pretrained sentiment network as reward model
