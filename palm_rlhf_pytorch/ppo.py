@@ -110,6 +110,7 @@ class RLHFTrainer(nn.Module):
         actor_lr = 1e-4,
         critic_lr = 1e-4,
         betas = (0.9, 0.999),
+        max_norm = None,
         eps_clip = 0.2,
         value_clip = 0.4,
         beta_s = .01,
@@ -152,6 +153,8 @@ class RLHFTrainer(nn.Module):
 
         self.epochs = epochs
         self.minibatch_size = minibatch_size
+        self.max_norm = max_norm
+
         self.kl_div_loss_weight = kl_div_loss_weight
 
         # optimizers
@@ -284,6 +287,10 @@ class RLHFTrainer(nn.Module):
                 # update actor
 
                 loss.backward()
+
+                if exists(self.max_norm):
+                    torch.nn.utils.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
+
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
 
@@ -292,6 +299,10 @@ class RLHFTrainer(nn.Module):
                 value_loss = clipped_value_loss(values[..., None], rewards, old_values, self.value_clip)
 
                 value_loss.mean().backward()
+
+                if exists(self.max_norm):
+                    torch.nn.utils.clip_grad_norm_(self.actor_critic.critic_parameters(), self.max_norm)
+
                 self.critic_optim.step()
                 self.critic_optim.zero_grad()
 

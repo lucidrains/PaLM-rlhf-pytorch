@@ -119,6 +119,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] test the system using a pretrained sentiment network as reward model
 - [ ] write the memory in PPO to memmapped numpy file
 - [ ] get sampling with variable lengthed prompts working, even if it is not needed given bottleneck is human feedback
+- [ ] also allow for non-LoRA based finetuning, as well as being able to just fine-tune the penulimate N layers
 
 ## Appreciation
 
