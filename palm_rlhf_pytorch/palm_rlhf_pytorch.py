@@ -11,7 +11,7 @@ import torch
 from torch import einsum, nn
 import torch.nn.functional as F
 
-from einops import rearrange, reduce, pack, unpack
+from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean, gumbel_sample
@@ -494,9 +494,9 @@ class RewardModel(nn.Module):
         sample_temperature = 1.,
         disable_lora = False
     ):
-        extra_embed = None
-
         # reward model should have an understanding of which section is prompt, and which section is response
+
+        extra_embed = None
 
         if exists(prompt_mask):
             extra_embed = torch.where(
@@ -566,7 +566,10 @@ class ActorCritic(nn.Module):
         self.critic_lora_scope = critic_lora_scope
 
         self.pooled_values = pooled_values
-        self.value_head = nn.Linear(palm.dim, 1)
+        self.value_head = nn.Sequential(
+            nn.Linear(palm.dim, 1),
+            Rearrange('... 1 -> ...')
+        )
 
     def actor_parameters(self):
         return [
@@ -586,10 +589,9 @@ class ActorCritic(nn.Module):
         state,
         max_seq_len,
         eos_token = None,
+        return_values = False,
         **kwargs
     ):
-        assert state.ndim == 1, 'only allow for sampling one sequence at a time for now'
-
         actions = self.actor_palm.generate(
             max_seq_len,
             prompt = state,       
@@ -604,6 +606,7 @@ class ActorCritic(nn.Module):
         state_len = state.shape[-1]
 
         prompt_mask = torch.arange(sequence.shape[-1], device = state.device) < state_len
+        prompt_mask = repeat(prompt_mask, 'n -> b n', b = sequence.shape[0])
 
         mask = None
         if exists(eos_token):
@@ -611,13 +614,10 @@ class ActorCritic(nn.Module):
             mask = F.pad(mask, (1, -1), value = True) # include eos token
 
         action_logits, value = self.forward(
-            rearrange(sequence, 'n -> 1 n'),
-            mask = (rearrange(mask, 'n -> 1 n') if exists(mask) else None)
-        )
-
-        action_logits = rearrange(action_logits, '1 ... -> ...')
-
-        value = rearrange(value, '... 1 -> ...')
+            sequence,
+            mask = mask,
+            return_values = return_values
+        )        
 
         return PPOActionCriticReturn(
             actions,
@@ -631,12 +631,16 @@ class ActorCritic(nn.Module):
     def forward(
         self,
         x,
-        mask = None
+        mask = None,
+        return_values = True
     ):
         action_logits = self.actor_palm(
             x,
             finetune_scope = self.actor_lora_scope
         )
+
+        if not return_values:
+            return action_logits, None
 
         critic_embeds = self.critic_palm(
             x,

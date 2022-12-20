@@ -106,8 +106,9 @@ trainer = RLHFTrainer(
 trainer.train(num_episodes = 50000)
 
 # then, if it succeeded...
+# generate say 10 samples and use the reward model to return the best one
 
-answer = trainer.generate(2048, prompt = prompts[0]) # (<= 2048,)
+answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 2048,)
 ```
 
 ## Todo

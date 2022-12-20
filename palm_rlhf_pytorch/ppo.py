@@ -15,7 +15,7 @@ from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-from einops import rearrange
+from einops import rearrange, repeat
 
 from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, RewardModel, ActorCritic
 from palm_rlhf_pytorch.utils import masked_mean
@@ -177,9 +177,47 @@ class RLHFTrainer(nn.Module):
         return next(self.parameters()).device
 
     @torch.no_grad()
-    def generate(self, *args, **kwargs):
+    def generate(
+        self,
+        max_seq_len,
+        *args,
+        prompt,
+        num_samples = 4,  # sample 4 per prompt and select the one with highest reward
+        **kwargs
+    ):
+        assert prompt.ndim == 1, 'only one prompt allowed at a time for now'
+        prompt = repeat(prompt, 'n -> b n', b = num_samples)
+
         self.actor_critic.eval()
-        return self.actor_critic.actor_palm.generate(*args, **kwargs)
+
+        (
+            actions,
+            sequences,
+            mask,
+            prompt_mask,
+            action_logits,
+            _
+        ) = self.actor_critic.generate(
+            prompt,
+            *args,
+            max_seq_len = max_seq_len,
+            return_values = False,
+            **kwargs
+        )
+
+        rewards = self.reward_model(
+            sequences,
+            prompt_mask = prompt_mask,
+            mask = mask,
+            sample = True
+        )
+
+        best_sequence_index = rewards.topk(1, dim = -1).indices
+
+        best_sequence = sequences[best_sequence_index]
+        best_sequence = rearrange(best_sequence, '1 ... -> ...')
+
+        return best_sequence
 
     def learn(
         self,
@@ -251,7 +289,7 @@ class RLHFTrainer(nn.Module):
 
                 # calculate value loss and update value network separate from policy network
 
-                value_loss = clipped_value_loss(values, rewards, old_values, self.value_clip)
+                value_loss = clipped_value_loss(values[..., None], rewards, old_values, self.value_clip)
 
                 value_loss.mean().backward()
                 self.critic_optim.step()
@@ -299,14 +337,17 @@ class RLHFTrainer(nn.Module):
                     action_logits,
                     value
                 ) = self.actor_critic.generate(
-                    state,
+                    rearrange(state, 'n -> 1 n'),
                     max_seq_len = max_seq_len,
                     eos_token = eos_token,
-                    temperature = temperature
+                    temperature = temperature,
+                    return_values = True
                 )
 
                 action_prob = action_logits.softmax(dim = -1)
                 action_log_prob = log_prob(action_prob, actions)
+
+                actions = rearrange(actions, '1 ... -> ...')
 
                 # get reward as given by supervised trained reward model
 
@@ -334,8 +375,8 @@ class RLHFTrainer(nn.Module):
                     detach_to_cpu_(rearrange(sequence, '1 n -> n')),
                     detach_to_cpu_(rearrange(prompt_mask, '1 n -> n')),
                     detach_to_cpu_(rearrange(mask, '1 n -> n')),
-                    detach_to_cpu_(action_prob),
-                    detach_to_cpu_(action_log_prob),
+                    detach_to_cpu_(rearrange(action_prob, '1 ... -> ...')),
+                    detach_to_cpu_(rearrange(action_log_prob, '1 n -> n')),
                     detach_to_cpu_(reward),
                     detach_to_cpu_(value)
                 ))
