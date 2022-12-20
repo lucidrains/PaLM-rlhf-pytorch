@@ -118,6 +118,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
 - [ ] test the system using a pretrained sentiment network as reward model
 - [ ] write the memory in PPO to memmapped numpy file
+- [ ] get sampling with variable lengthed prompts working, even if it is not needed given bottleneck is human feedback
 
 ## Appreciation
 
