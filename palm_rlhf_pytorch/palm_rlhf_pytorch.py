@@ -549,7 +549,7 @@ PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
 ])
 
 @beartype
-class ActorWithValueHead(nn.Module):
+class ActorCritic(nn.Module):
     def __init__(
         self,
         palm: PaLM,
@@ -641,13 +641,10 @@ class ActorWithValueHead(nn.Module):
         x,
         mask = None
     ):
-        actor_embeds = self.actor_palm(
+        action_logits = self.actor_palm(
             x,
-            return_only_embedding = True,
             finetune_scope = self.actor_lora_scope
-        )        
-
-        action_logits = self.actor_palm.to_logits(actor_embeds)
+        )
 
         critic_embeds = self.critic_palm(
             x,

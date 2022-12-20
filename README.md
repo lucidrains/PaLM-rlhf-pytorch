@@ -107,7 +107,7 @@ trainer.train(num_episodes = 50000)
 
 # then, if it succeeded...
 
-answer = palm.generate(2048, prompts = prompts[0])
+answer = trainer.generate(2048, prompt = prompts[0]) # (<= 2048,)
 ```
 
 ## Todo

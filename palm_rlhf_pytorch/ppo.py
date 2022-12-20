@@ -17,12 +17,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from einops import rearrange
 
-from palm_rlhf_pytorch.palm_rlhf_pytorch import (
-    PaLM,
-    ActorWithValueHead,
-    RewardModel
-)
-
+from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, RewardModel, ActorCritic
 from palm_rlhf_pytorch.utils import masked_mean
 
 # data
@@ -106,7 +101,7 @@ class RLHFTrainer(nn.Module):
         tokenizer: Callable = None,
         palm: PaLM,
         reward_model: RewardModel,
-        actor_critic: Optional[ActorWithValueHead] = None,
+        actor_critic: Optional[ActorCritic] = None,
         actor_lr = 1e-4,
         critic_lr = 1e-4,
         betas = (0.9, 0.999),
@@ -142,7 +137,7 @@ class RLHFTrainer(nn.Module):
         self.palm = palm
 
         if not exists(actor_critic):
-            actor_critic = ActorWithValueHead(palm = palm, pooled_values = True).to(palm.device)
+            actor_critic = ActorCritic(palm = palm, pooled_values = True).to(palm.device)
 
         self.actor_critic = actor_critic
 
@@ -165,16 +160,21 @@ class RLHFTrainer(nn.Module):
         self.value_clip = value_clip
         self.beta_s = beta_s
 
-    def save_actor_critic(self, filepath = './checkpoint.pt'):
+    def save(self, filepath = './checkpoint.pt'):
         torch.save(self.actor_critic.state_dict(), filepath)
 
-    def load_actor_critic(self, filepath = './checkpoint.pt'):
+    def load(self, filepath = './checkpoint.pt'):
         state_dict = torch.load(filepath)
         self.actor_critic.load_state_dict(state_dict)
 
     @property
     def device(self):
         return next(self.parameters()).device
+
+    @torch.no_grad()
+    def generate(self, *args, **kwargs):
+        self.actor_critic.eval()
+        return self.actor_critic.actor_palm.generate(*args, **kwargs)
 
     def learn(
         self,
