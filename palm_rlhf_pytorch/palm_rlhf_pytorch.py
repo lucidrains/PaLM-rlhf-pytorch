@@ -573,10 +573,7 @@ class ActorCritic(nn.Module):
         self.critic_lora_scope = critic_lora_scope
 
         self.pooled_values = pooled_values
-        self.value_head = nn.Sequential(
-            nn.Linear(palm.dim, 1),
-            Rearrange('... 1 -> ...')
-        )
+        self.value_head = nn.Linear(palm.dim, 1)
 
     def actor_parameters(self):
         return [
@@ -625,7 +622,7 @@ class ActorCritic(nn.Module):
 
         action_logits = rearrange(action_logits, '1 ... -> ...')
 
-        value = rearrange(value, '1 ->')
+        value = rearrange(value, '... 1 -> ...')
 
         return PPOActionCriticReturn(
             actions,

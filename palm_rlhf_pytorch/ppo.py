@@ -39,7 +39,7 @@ class ExperienceDataset(Dataset):
         self.device = device
 
     def __len__(self):
-        return len(self.data[0])
+        return self.data[0].shape[0]
 
     def __getitem__(self, ind):
         return tuple(map(lambda t: t[ind].to(self.device), self.data))
@@ -64,8 +64,8 @@ def normalize(t, eps = 1e-5, dim = None):
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
-def log_prob(prob, indices, dim = -1):
-    return log(prob.gather(dim, indices))
+def log_prob(prob, indices):
+    return log(prob.gather(-1, indices[..., None])).squeeze(-1)
 
 def masked_entropy(prob, dim = -1, mask = None):
     entropies = (prob * log(prob)).sum(dim = -1)
@@ -180,48 +180,13 @@ class RLHFTrainer(nn.Module):
         self,
         memories: Deque[Memory]
     ):
-        # retrieve and prepare data from memory for training
+        # stack all data stored in the memories
 
-        sequences = []
-        prompt_masks = []
-        masks = []
-        action_probs = []
-        old_log_probs = []
-        rewards = []
-        values = []
-
-        for (
-            sequence,
-            prompt_mask,
-            mask,
-            action_prob,
-            action_log_prob,
-            reward,
-            value
-        ) in memories:
-            sequences.append(sequence)
-            prompt_masks.append(prompt_mask)
-            masks.append(mask)
-            action_probs.append(action_prob)
-            old_log_probs.append(action_log_prob)
-            rewards.append(reward)
-            values.append(value)
-
-        # stack all tensors
-
-        sequences, prompt_masks, masks, action_probs, old_log_probs, rewards, values = map(partial(pad_sequence, batch_first = True), (sequences, prompt_masks, masks, action_probs, old_log_probs, rewards, values))
+        all_memories_stacked_and_padded = list(map(partial(pad_sequence, batch_first = True), zip(*memories)))
 
         # prepare dataloader for policy phase training
 
-        dl = create_dataloader([
-            sequence,
-            prompt_mask,
-            mask,
-            action_probs,
-            old_log_probs,
-            reward,
-            value
-        ], self.minibatch_size, device = self.device)
+        dl = create_dataloader(all_memories_stacked_and_padded, self.minibatch_size, device = self.device)
 
         self.actor_critic.train()
 
@@ -244,10 +209,10 @@ class RLHFTrainer(nn.Module):
                     mask = action_masks
                 )
 
-                action_len = old_log_probs.shape[-2]
+                action_len = old_log_probs.shape[-1]
 
                 action_probs = action_logits.softmax(dim = -1)
-                action_log_probs = log_prob(action_probs, sequences[..., None])
+                action_log_probs = log_prob(action_probs, sequences)
                 action_log_probs = action_log_probs[:, -action_len:]
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
@@ -339,7 +304,7 @@ class RLHFTrainer(nn.Module):
                     )
 
                 action_prob = action_logits.softmax(dim = -1)
-                action_log_prob = log_prob(action_prob, actions[..., None])
+                action_log_prob = log_prob(action_prob, actions)
 
                 # get reward as given by supervised trained reward model
 
@@ -364,13 +329,13 @@ class RLHFTrainer(nn.Module):
                 # store memory for learning
 
                 memories.append(Memory(
-                    detach_to_cpu_(sequence),
-                    detach_to_cpu_(prompt_mask),
-                    detach_to_cpu_(mask),
+                    detach_to_cpu_(rearrange(sequence, '1 n -> n')),
+                    detach_to_cpu_(rearrange(prompt_mask, '1 n -> n')),
+                    detach_to_cpu_(rearrange(mask, '1 n -> n')),
                     detach_to_cpu_(action_prob),
                     detach_to_cpu_(action_log_prob),
-                    detach_to_cpu_(reward[None]),
-                    detach_to_cpu_(value[None])
+                    detach_to_cpu_(reward),
+                    detach_to_cpu_(value)
                 ))
 
                 # learn from the stored memories
