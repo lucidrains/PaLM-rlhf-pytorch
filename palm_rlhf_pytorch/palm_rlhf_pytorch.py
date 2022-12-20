@@ -547,6 +547,8 @@ class ActorCritic(nn.Module):
         palm: PaLM,
         critic_palm: Optional[PaLM] = None,
         pooled_values = False,
+        actor_lora = True,
+        critic_lora = True,
         actor_lora_scope = 'actor',
         critic_lora_scope = 'critic',
     ):
@@ -558,11 +560,17 @@ class ActorCritic(nn.Module):
         if not exists(self.critic_palm):
             self.critic_palm = copy.deepcopy(palm)
 
-        self.actor_palm.add_finetune_params(actor_lora_scope)
-        self.critic_palm.add_finetune_params(critic_lora_scope)
+        self.actor_lora = actor_lora
+        self.critic_lora = critic_lora
 
-        self.actor_lora_scope = actor_lora_scope
-        self.critic_lora_scope = critic_lora_scope
+        self.actor_lora_scope = actor_lora_scope if actor_lora else None
+        self.critic_lora_scope = critic_lora_scope if critic_lora else None
+
+        if self.actor_lora:
+            self.actor_palm.add_finetune_params(actor_lora_scope)
+
+        if self.critic_lora:
+            self.critic_palm.add_finetune_params(critic_lora_scope)
 
         self.pooled_values = pooled_values
         self.value_head = nn.Sequential(
@@ -571,11 +579,17 @@ class ActorCritic(nn.Module):
         )
 
     def actor_parameters(self):
+        if not self.actor_lora:
+            return self.actor_palm.parameters()
+
         return [
             *self.actor_palm.finetune_parameters(self.actor_lora_scope)
         ]
 
     def critic_parameters(self):
+        if not self.actor_lora:
+            return [*self.critic_palm.parameters(), *self.value_head.parameters()]
+
         return [
             *self.critic_palm.finetune_parameters(self.critic_lora_scope),
             *self.value_head.parameters()

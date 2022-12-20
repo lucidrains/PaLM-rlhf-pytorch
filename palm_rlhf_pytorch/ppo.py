@@ -112,6 +112,8 @@ class RLHFTrainer(nn.Module):
         critic_lr = 1e-4,
         actor_wd = 0.,
         critic_wd = 0.,
+        actor_lora = True,
+        critic_lora = True,
         betas = (0.9, 0.999),
         max_norm = None,
         eps_clip = 0.2,
@@ -146,7 +148,12 @@ class RLHFTrainer(nn.Module):
         self.palm = palm
 
         if not exists(actor_critic):
-            actor_critic = ActorCritic(palm = palm, pooled_values = True).to(palm.device)
+            actor_critic = ActorCritic(
+                palm = palm,
+                actor_lora = actor_lora,
+                critic_lora = critic_lora,
+                pooled_values = True
+            ).to(palm.device)
 
         self.actor_critic = actor_critic
 
