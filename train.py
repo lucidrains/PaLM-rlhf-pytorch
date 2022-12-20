@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from palm_rlhf_pytorch import PaLM
+from accelerate import Accelerator
 
 # constants
 
@@ -36,13 +37,17 @@ def decode_tokens(tokens):
     return "".join(list(map(decode_token, tokens)))
 
 
+# HuggingFace's Accelerator
+accelerator = Accelerator(gradient_accumulation_steps=GRADIENT_ACCUMULATE_EVERY)
+device = accelerator.device
+
 # instantiate GPT-like decoder model
 
 model = PaLM(
     num_tokens=256,
     dim=512,
     depth=8
-).cuda()
+).to(device)
 
 # prepare enwik8 data
 
@@ -61,7 +66,7 @@ class TextSamplerDataset(Dataset):
     def __getitem__(self, index):
         rand_start = torch.randint(0, self.data.size(0) - self.seq_len, (1,))
         full_seq = self.data[rand_start : rand_start + self.seq_len + 1].long()
-        return full_seq.cuda()
+        return full_seq.to(device)
 
     def __len__(self):
         return self.data.size(0) // self.seq_len
@@ -75,32 +80,38 @@ val_loader = cycle(DataLoader(val_dataset, batch_size=BATCH_SIZE))
 
 optim = Adam(model.palm_parameters(), lr=LEARNING_RATE)
 
+model, optim, train_loader, val_loader = accelerator.prepare(
+    model, optim, train_loader, val_loader
+)
+
 # training
 
 for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
     model.train()
 
-    for __ in range(GRADIENT_ACCUMULATE_EVERY):
+    with accelerator.accumulate(model):
         loss = model(next(train_loader), return_loss = True)
-        loss.backward()
 
-    print(f"training loss: {loss.item()}")
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-    optim.step()
-    optim.zero_grad()
+        accelerator.backward(loss)
 
-    if i % VALIDATE_EVERY == 0:
-        model.eval()
-        with torch.no_grad():
-            loss = model(next(val_loader), return_loss = True)
-            print(f"validation loss: {loss.item()}")
+        accelerator.print(f"training loss: {loss.item()}")
+        if accelerator.sync_gradients:
+            accelerator.clip_grad_norm_(model.parameters(), 0.5)
+        optim.step()
+        optim.zero_grad()
 
-    if i % GENERATE_EVERY == 0:
-        model.eval()
-        inp = random.choice(val_dataset)[:PRIME_LENGTH]
-        prime = decode_tokens(inp)
-        print(f"%s \n\n %s", (prime, "*" * 100))
+        if i % VALIDATE_EVERY == 0:
+            model.eval()
+            with torch.no_grad():
+                loss = model(next(val_loader), return_loss = True)
+                accelerator.print(f"validation loss: {loss.item()}")
 
-        sample = model.generate(GENERATE_LENGTH, inp[None, ...])
-        output_str = decode_tokens(sample[0])
-        print(output_str, "\n")
+        if i % GENERATE_EVERY == 0:
+            model.eval()
+            inp = random.choice(val_dataset)[:PRIME_LENGTH]
+            prime = decode_tokens(inp)
+            accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
+
+            sample = model.generate(GENERATE_LENGTH, inp[None, ...])
+            output_str = decode_tokens(sample[0])
+            accelerator.print(output_str, "\n")
