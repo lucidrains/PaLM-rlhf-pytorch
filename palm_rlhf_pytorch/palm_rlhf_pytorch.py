@@ -505,7 +505,7 @@ class RewardModel(nn.Module):
         mask = None,
         prompt_mask = None,
         labels = None,
-        sample_from_binned = False,
+        sample = False,
         sample_temperature = 1.,
         disable_lora = False
     ):
@@ -533,8 +533,7 @@ class RewardModel(nn.Module):
         pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
 
-        if sample_from_binned:
-            assert self.binned_output
+        if sample and self.binned_output:
             assert not exists(labels)
             pred = gumbel_sample(pred, temperature = sample_temperature, dim = -1)
 

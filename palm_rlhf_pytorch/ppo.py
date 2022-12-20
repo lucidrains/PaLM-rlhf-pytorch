@@ -323,7 +323,7 @@ class RLHFTrainer(nn.Module):
                     sequence,
                     prompt_mask = prompt_mask,
                     mask = mask,
-                    sample_from_binned = True
+                    sample = True
                 )
 
                 detach_to_cpu_ = lambda t: t.detach().cpu()
