@@ -18,6 +18,7 @@ from torch.nn.utils.rnn import pad_sequence
 from einops import rearrange, repeat
 
 from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, RewardModel, ActorCritic
+from palm_rlhf_pytorch.optimizer import get_optimizer
 from palm_rlhf_pytorch.utils import masked_mean
 
 # data
@@ -109,6 +110,8 @@ class RLHFTrainer(nn.Module):
         actor_critic: Optional[ActorCritic] = None,
         actor_lr = 1e-4,
         critic_lr = 1e-4,
+        actor_wd = 0.,
+        critic_wd = 0.,
         betas = (0.9, 0.999),
         max_norm = None,
         eps_clip = 0.2,
@@ -159,8 +162,8 @@ class RLHFTrainer(nn.Module):
 
         # optimizers
 
-        self.actor_optim = Adam(actor_critic.actor_parameters(), lr = actor_lr, betas = betas)
-        self.critic_optim = Adam(actor_critic.critic_parameters(), lr = critic_lr, betas = betas)
+        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas)
+        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas)
 
         # ppo hyperparams
 
