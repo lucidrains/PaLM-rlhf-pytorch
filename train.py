@@ -92,8 +92,9 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
 
         accelerator.backward(loss)
 
-        print(f"training loss: {loss.item()}")
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        accelerator.print(f"training loss: {loss.item()}")
+        if accelerator.sync_gradients:
+            accelerator.clip_grad_norm_(model.parameters(), 0.5)
         optim.step()
         optim.zero_grad()
 
