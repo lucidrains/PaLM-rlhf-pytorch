@@ -35,12 +35,21 @@ def multi_context(*cms):
     with ExitStack() as stack:
         yield [stack.enter_context(cls()) for cls in cms]
 
-def eval_decorator(model):
+def eval_context(model):
     @contextmanager
     def inner():
         was_training = model.training
         model.eval()
         yield
+        model.train(was_training)
+    return inner
+
+def eval_method_decorator(fn):
+    @contextmanager
+    def inner(self, *args, **kwargs):
+        was_training = model.training
+        model.eval()
+        yield fn(*args, **kwargs)
         model.train(was_training)
     return inner
 
@@ -373,7 +382,7 @@ class PaLM(nn.Module):
 
         n, out = prompt.shape[-1], prompt.clone()
 
-        context = multi_context(eval_decorator(self), torch.no_grad) if not trainable else nullcontext
+        context = multi_context(eval_context(self), torch.no_grad) if not trainable else nullcontext
 
         with context:
             wrapper_fn = identity if not use_tqdm else tqdm
@@ -586,6 +595,8 @@ class ActorCritic(nn.Module):
             *self.value_head.parameters()
         ]
 
+    # @eval_decorator
+    @torch.no_grad()
     def generate(
         self,
         state,

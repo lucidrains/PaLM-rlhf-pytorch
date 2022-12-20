@@ -291,22 +291,19 @@ class RLHFTrainer(nn.Module):
 
                 # get predicted sequence
 
-                with torch.no_grad():
-                    self.actor_critic.eval()
-
-                    (
-                        actions,
-                        sequence,
-                        mask,
-                        prompt_mask,
-                        action_logits,
-                        value
-                    ) = self.actor_critic.generate(
-                        state,
-                        max_seq_len = max_seq_len,
-                        eos_token = eos_token,
-                        temperature = temperature
-                    )
+                (
+                    actions,
+                    sequence,
+                    mask,
+                    prompt_mask,
+                    action_logits,
+                    value
+                ) = self.actor_critic.generate(
+                    state,
+                    max_seq_len = max_seq_len,
+                    eos_token = eos_token,
+                    temperature = temperature
+                )
 
                 action_prob = action_logits.softmax(dim = -1)
                 action_log_prob = log_prob(action_prob, actions)
