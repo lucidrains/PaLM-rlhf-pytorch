@@ -37,11 +37,12 @@ def decode_tokens(tokens):
     return "".join(list(map(decode_token, tokens)))
 
 
-# HuggingFace's Accelerator
-accelerator = Accelerator(gradient_accumulation_steps=GRADIENT_ACCUMULATE_EVERY)
+# accelerator
+
+accelerator = Accelerator()
 device = accelerator.device
 
-# instantiate GPT-like decoder model
+# instantiate palm
 
 model = PaLM(
     num_tokens=256,
@@ -89,29 +90,28 @@ model, optim, train_loader, val_loader = accelerator.prepare(
 for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
     model.train()
 
-    with accelerator.accumulate(model):
+    for _ in range(GRADIENT_ACCUMULATE_EVERY):
         loss = model(next(train_loader), return_loss = True)
+        accelerator.backward(loss / GRADIENT_ACCUMULATE_EVERY)
 
-        accelerator.backward(loss)
+    accelerator.print(f"training loss: {loss.item()}")
+    accelerator.clip_grad_norm_(model.parameters(), 0.5)
 
-        accelerator.print(f"training loss: {loss.item()}")
-        if accelerator.sync_gradients:
-            accelerator.clip_grad_norm_(model.parameters(), 0.5)
-        optim.step()
-        optim.zero_grad()
+    optim.step()
+    optim.zero_grad()
 
-        if i % VALIDATE_EVERY == 0:
-            model.eval()
-            with torch.no_grad():
-                loss = model(next(val_loader), return_loss = True)
-                accelerator.print(f"validation loss: {loss.item()}")
+    if i % VALIDATE_EVERY == 0:
+        model.eval()
+        with torch.no_grad():
+            loss = model(next(val_loader), return_loss = True)
+            accelerator.print(f"validation loss: {loss.item()}")
 
-        if i % GENERATE_EVERY == 0:
-            model.eval()
-            inp = random.choice(val_dataset)[:PRIME_LENGTH]
-            prime = decode_tokens(inp)
-            accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
+    if i % GENERATE_EVERY == 0:
+        model.eval()
+        inp = random.choice(val_dataset)[:PRIME_LENGTH]
+        prime = decode_tokens(inp)
+        accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
 
-            sample = model.generate(GENERATE_LENGTH, inp[None, ...])
-            output_str = decode_tokens(sample[0])
-            accelerator.print(output_str, "\n")
+        sample = model.generate(GENERATE_LENGTH, inp[None, ...])
+        output_str = decode_tokens(sample[0])
+        accelerator.print(output_str, "\n")
