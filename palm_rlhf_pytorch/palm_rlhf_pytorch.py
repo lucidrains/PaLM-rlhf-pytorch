@@ -550,7 +550,7 @@ class ActorCritic(nn.Module):
         actor_lora = True,
         critic_lora = True,
         actor_lora_scope = 'actor',
-        critic_lora_scope = 'critic',
+        critic_lora_scope = 'critic'
     ):
         super().__init__()
         self.actor_palm = palm

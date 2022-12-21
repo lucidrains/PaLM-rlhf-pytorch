@@ -122,6 +122,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] write the memory in PPO to memmapped numpy file
 - [ ] get sampling with variable lengthed prompts working, even if it is not needed given bottleneck is human feedback
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
+- [ ] redo normalize to be able to have a masked version
 
 ## Appreciation
 

@@ -69,6 +69,21 @@ def normalize(t, eps = 1e-5, dim = None):
     var = torch.var(t, unbiased = False, **kwargs)
     return (t - t.mean(**kwargs)) * var.clamp(min = eps).rsqrt()
 
+def pad_sequence_fixed(sequences, *args, **kwargs):
+    first_el = sequences[0]
+    has_no_dimension = first_el.ndim == 0
+
+    # if no dimensions, add a single dimension
+    if has_no_dimension:
+        sequences = tuple(map(lambda t: t[None], sequences))
+
+    out = pad_sequence(sequences, *args, **kwargs)
+
+    if has_no_dimension:
+        out = rearrange(out, '... 1 -> ...')
+
+    return out
+
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
@@ -116,6 +131,7 @@ class RLHFTrainer(nn.Module):
         critic_wd = 0.,
         actor_lora = True,
         critic_lora = True,
+        critic_pooled_values = True,
         betas = (0.9, 0.999),
         max_norm = None,
         eps_clip = 0.2,
@@ -157,7 +173,7 @@ class RLHFTrainer(nn.Module):
                 palm = palm,
                 actor_lora = actor_lora,
                 critic_lora = critic_lora,
-                pooled_values = True
+                pooled_values = critic_pooled_values
             ).to(palm.device)
 
         self.actor_critic = actor_critic
@@ -264,7 +280,7 @@ class RLHFTrainer(nn.Module):
     ):
         # stack all data stored in the memories
 
-        all_memories_stacked_and_padded = list(map(partial(pad_sequence, batch_first = True), zip(*memories)))
+        all_memories_stacked_and_padded = list(map(partial(pad_sequence_fixed, batch_first = True), zip(*memories)))
 
         # prepare dataloader for policy phase training
 
@@ -308,10 +324,24 @@ class RLHFTrainer(nn.Module):
                 if self.kl_div_loss_weight > 0:
                     kl_div_loss = masked_kl_div(action_probs, old_action_probs, mask = action_masks) * self.kl_div_loss_weight
 
+                # handle non-pooled values
+
+                if old_values.ndim == 2:
+                    old_values = old_values[:, -action_len:]
+                    values = values[:, -action_len:]
+                    rewards = rearrange(rewards, 'b -> b 1')
+
+                if values.ndim != rewards.ndim:
+                    values = values[..., None]
+
                 # calculate clipped surrogate objective, classic PPO loss
 
                 ratios = (action_log_probs - old_log_probs).exp()
                 advantages = normalize(rewards - old_values, dim = -1)
+
+                if advantages.ndim == 1:
+                    advantages = rearrange(advantages, 'b -> b 1')
+
                 surr1 = ratios * advantages
                 surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
                 policy_loss = - torch.min(surr1, surr2) - self.beta_s * entropies
@@ -334,7 +364,7 @@ class RLHFTrainer(nn.Module):
 
                 # calculate value loss and update value network separate from policy network
 
-                value_loss = clipped_value_loss(values[..., None], rewards, old_values, self.value_clip)
+                value_loss = clipped_value_loss(values, rewards, old_values, self.value_clip)
                 value_loss = value_loss.mean()
 
                 self.print(f'critic_loss: {value_loss.item():.3f}')
@@ -419,16 +449,16 @@ class RLHFTrainer(nn.Module):
                     sample = True
                 )
 
-                detach_to_cpu_ = lambda t: t.detach().cpu()
+                detach_to_cpu_ = lambda t: rearrange(t.detach().cpu(), '1 ... -> ...')
 
                 # store memory for learning
 
                 memories.append(Memory(
-                    detach_to_cpu_(rearrange(sequence, '1 n -> n')),
-                    detach_to_cpu_(rearrange(prompt_mask, '1 n -> n')),
-                    detach_to_cpu_(rearrange(mask, '1 n -> n')),
-                    detach_to_cpu_(rearrange(action_prob, '1 ... -> ...')),
-                    detach_to_cpu_(rearrange(action_log_prob, '1 n -> n')),
+                    detach_to_cpu_(sequence),
+                    detach_to_cpu_(prompt_mask),
+                    detach_to_cpu_(mask),
+                    detach_to_cpu_(action_prob),
+                    detach_to_cpu_(action_log_prob),
                     detach_to_cpu_(reward),
                     detach_to_cpu_(value)
                 ))
