@@ -21,6 +21,8 @@ from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, RewardModel, ActorCritic
 from palm_rlhf_pytorch.optimizer import get_optimizer
 from palm_rlhf_pytorch.utils import masked_mean
 
+from accelerate import Accelerator
+
 # data
 
 Memory = namedtuple('Memory', [
@@ -122,9 +124,12 @@ class RLHFTrainer(nn.Module):
         pad_value = 0.,
         minibatch_size = 16,
         epochs = 1,
-        kl_div_loss_weight = 0.1 # between old action probs and new action probs - not sure what the right value is
+        kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
+        accelerate_kwargs: dict = {}
     ):
         super().__init__()
+
+        self.accelerate = Accelerator(**accelerate_kwargs)
 
         # take care of prompts -> token ids
 
@@ -178,6 +183,24 @@ class RLHFTrainer(nn.Module):
         self.value_clip = value_clip
         self.beta_s = beta_s
 
+        # prepare with accelerator
+
+        (
+            self.actor_critic,
+            self.reward_model,
+            self.actor_optim,
+            self.critic_optim
+        ) = self.accelerate.prepare(
+            self.actor_critic,
+            self.reward_model,
+            self.actor_optim,
+            self.critic_optim
+        )
+
+
+    def print(self, msg):
+        return self.accelerate.print(msg)
+
     def save(self, filepath = './checkpoint.pt'):
         torch.save(self.actor_critic.state_dict(), filepath)
 
@@ -187,7 +210,7 @@ class RLHFTrainer(nn.Module):
 
     @property
     def device(self):
-        return next(self.parameters()).device
+        return self.accelerate.device
 
     @torch.no_grad()
     def generate(
@@ -201,7 +224,10 @@ class RLHFTrainer(nn.Module):
         assert prompt.ndim == 1, 'only one prompt allowed at a time for now'
         prompt = repeat(prompt, 'n -> b n', b = num_samples)
 
-        self.actor_critic.eval()
+        actor_critic = self.accelerate.unwrap_model(self.actor_critic)
+        reward_model = self.accelerate.unwrap_model(self.reward_model)
+
+        actor_critic.eval()
 
         (
             actions,
@@ -210,7 +236,7 @@ class RLHFTrainer(nn.Module):
             prompt_mask,
             action_logits,
             _
-        ) = self.actor_critic.generate(
+        ) = actor_critic.generate(
             prompt,
             *args,
             max_seq_len = max_seq_len,
@@ -218,7 +244,7 @@ class RLHFTrainer(nn.Module):
             **kwargs
         )
 
-        rewards = self.reward_model(
+        rewards = reward_model(
             sequences,
             prompt_mask = prompt_mask,
             mask = mask,
@@ -296,10 +322,10 @@ class RLHFTrainer(nn.Module):
 
                 # update actor
 
-                loss.backward()
+                self.accelerate.backward(loss)
 
                 if exists(self.max_norm):
-                    torch.nn.utils.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
+                    self.accelerator.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
 
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
@@ -308,10 +334,10 @@ class RLHFTrainer(nn.Module):
 
                 value_loss = clipped_value_loss(values[..., None], rewards, old_values, self.value_clip)
 
-                value_loss.mean().backward()
+                self.accelerate.backward(value_loss.mean())
 
                 if exists(self.max_norm):
-                    torch.nn.utils.clip_grad_norm_(self.actor_critic.critic_parameters(), self.max_norm)
+                    self.accelerator.clip_grad_norm_(self.actor_critic.critic_parameters(), self.max_norm)
 
                 self.critic_optim.step()
                 self.critic_optim.zero_grad()
