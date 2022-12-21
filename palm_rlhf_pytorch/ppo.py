@@ -324,7 +324,7 @@ class RLHFTrainer(nn.Module):
 
                 self.accelerate.backward(loss)
 
-                yield 'policy_loss', loss.item()
+                self.print(f'policy_loss: {loss.item():.3f}')
 
                 if exists(self.max_norm):
                     self.accelerator.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
@@ -337,7 +337,7 @@ class RLHFTrainer(nn.Module):
                 value_loss = clipped_value_loss(values[..., None], rewards, old_values, self.value_clip)
                 value_loss = value_loss.mean()
 
-                yield 'critic_loss', value_loss
+                self.print(f'critic_loss: {value_loss.item():.3f}')
 
                 self.accelerate.backward(value_loss)
 
@@ -436,10 +436,7 @@ class RLHFTrainer(nn.Module):
                 # learn from the stored memories
 
                 if time % update_timesteps == 0:
-
-                    for loss_name, loss in self.learn(memories):
-                        self.print(f'{loss_name}: {loss:.4f}')
-
+                    self.learn(memories)
                     memories.clear()
 
         print('rlhf training complete')
