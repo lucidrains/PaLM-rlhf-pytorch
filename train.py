@@ -22,26 +22,9 @@ PRIME_LENGTH = 128
 GENERATE_EVERY = 500
 GENERATE_LENGTH = 512
 SEQ_LEN = 1024
-LOG_WANDB = True
 
-# Logging with wandb
-try:
-    import wandb
-    run = wandb.init(project='PaLM RLHF', config={'lr': LEARNING_RATE, 'bs': BATCH_SIZE, 'seq_len': SEQ_LEN})
-    # Table to log generated text on Wandb
-    table = wandb.Table(columns = ["Generated Text", "Step"])
-except Exception as e:
-    print(e, "\nSkip logging since wandb unavailable")
-    LOG_WANDB = False
 
 # helpers
-
-def log_wandb(data, log_true):
-    if log_true:
-        if isinstance(data, dict):
-            wandb.log(data)
-        else:
-            table.add_data(*data)
 
 def cycle(loader):
     while True:
@@ -57,7 +40,10 @@ def decode_tokens(tokens):
 
 # accelerator
 
-accelerator = Accelerator()
+accelerator = Accelerator(log_with="wandb")
+
+hps={'lr': LEARNING_RATE, 'bs': BATCH_SIZE, 'seq_len': SEQ_LEN}
+accelerator.init_trackers("PaLM-rlhf", config=hps)
 device = accelerator.device
 
 # instantiate palm
@@ -110,9 +96,9 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
 
     for _ in range(GRADIENT_ACCUMULATE_EVERY):
         loss = model(next(train_loader), return_loss = True)
-        log_wandb({'train_loss': loss.item()}, LOG_WANDB)
         accelerator.backward(loss / GRADIENT_ACCUMULATE_EVERY)
 
+    accelerator.log({"train_loss": loss.item()}, step=i)
     accelerator.print(f"training loss: {loss.item()}")
     accelerator.clip_grad_norm_(model.parameters(), 0.5)
 
@@ -123,7 +109,7 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
         model.eval()
         with torch.no_grad():
             loss = model(next(val_loader), return_loss = True)
-            log_wandb({'val_loss': loss.item()}, LOG_WANDB)
+            accelerator.log({"val_loss": loss.item()}, step=i)
             accelerator.print(f"validation loss: {loss.item()}")
 
     if i % GENERATE_EVERY == 0:
@@ -135,7 +121,6 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
         sample = model.generate(GENERATE_LENGTH, inp[None, ...])
         output_str = decode_tokens(sample[0])
         accelerator.print(output_str, "\n")
-        log_wandb([output_str, i], LOG_WANDB)
-
-# Logs all generated texts in a wandb table
-log_wandb({"table": table}, LOG_WANDB)
+        
+# Necessary for trackers such as wandb        
+accelerator.end_training()
