@@ -66,9 +66,9 @@ class Residual(nn.Module):
 
         return y + x
 
-# rotary positional embedding
+# rotary positional embedding w/ xpos
 # https://arxiv.org/abs/2104.09864
-
+# https://arxiv.org/abs/2212.10554v1
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, scale_base = 512):
