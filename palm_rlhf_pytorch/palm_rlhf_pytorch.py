@@ -71,24 +71,33 @@ class Residual(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, scale_base = 512):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
 
-    def forward(self, max_seq_len, *, device):
-        seq = torch.arange(max_seq_len, device=device, dtype=self.inv_freq.dtype)
-        freqs = einsum("i , j -> i j", seq, self.inv_freq)
-        return torch.cat((freqs, freqs), dim=-1)
+        self.scale_base = scale_base
+        scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
+        self.register_buffer('scale', scale)
 
+    def forward(self, seq_len, device):
+        t = torch.arange(seq_len, device = device).type_as(self.inv_freq)
+        freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
+        freqs = torch.cat((freqs, freqs), dim = -1)
+
+        power = (torch.arange(seq_len, device = device) - (seq_len // 2)) / self.scale_base
+        scale = self.scale ** rearrange(power, 'n -> n 1')
+        scale = torch.cat((scale, scale), dim = -1)
+
+        return freqs, scale
 
 def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(pos, t):
-    return (t * pos.cos()) + (rotate_half(t) * pos.sin())
+def apply_rotary_pos_emb(pos, t, scale = 1.):
+    return (t * pos.cos() * scale) + (rotate_half(t) * pos.sin() * scale)
 
 
 # classic Noam Shazeer paper, except here they use SwiGLU instead of the more popular GEGLU for gating the feedforward
@@ -146,6 +155,7 @@ class ParallelTransformerBlock(nn.Module):
 
         self.register_buffer("mask", None, persistent=False)
         self.register_buffer("pos_emb", None, persistent=False)
+        self.register_buffer("pos_emb_scale", None, persistent=False)
 
     def get_mask(self, n, device):
         if exists(self.mask) and self.mask.shape[-1] >= n:
@@ -157,11 +167,12 @@ class ParallelTransformerBlock(nn.Module):
 
     def get_rotary_embedding(self, n, device):
         if exists(self.pos_emb) and self.pos_emb.shape[-2] >= n:
-            return self.pos_emb[:n]
+            return self.pos_emb[:n], self.pos_emb_scale[:n]
 
-        pos_emb = self.rotary_emb(n, device=device)
+        pos_emb, scale = self.rotary_emb(n, device=device)
         self.register_buffer("pos_emb", pos_emb, persistent=False)
-        return pos_emb
+        self.register_buffer("pos_emb_scale", scale, persistent=False)
+        return pos_emb, scale
 
     def forward(
         self,
@@ -211,10 +222,12 @@ class ParallelTransformerBlock(nn.Module):
 
         q = q * self.scale
 
-        # rotary embeddings
+        # rotary embeddings with xpos decay for better length extrapolation
 
-        positions = self.get_rotary_embedding(n, device)
-        q, k = map(lambda t: apply_rotary_pos_emb(positions, t), (q, k))
+        positions, scale = self.get_rotary_embedding(n, device)
+
+        q = apply_rotary_pos_emb(positions, q, scale)
+        k = apply_rotary_pos_emb(positions, k, scale ** -1)
 
         # similarity
 

@@ -159,3 +159,11 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     volume  = {abs/2106.09685}
 }
 ```
+
+```bibtex
+@inproceedings{Sun2022ALT,
+  title     = {A Length-Extrapolatable Transformer},
+  author    = {Yutao Sun and Li Dong and Barun Patra and Shuming Ma and Shaohan Huang and Alon Benhaim and Vishrav Chaudhary and Xia Song and Furu Wei},
+  year      = {2022}
+}
+```
