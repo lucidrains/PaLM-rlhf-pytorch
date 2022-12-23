@@ -13,7 +13,7 @@ def exists(val):
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
-def masked_mean(seq, mask = None, dim = 1):
+def masked_mean(seq, mask = None, dim = 1, keepdim = False):
     if not exists(mask):
         return seq.mean(dim = dim)
 
@@ -21,8 +21,8 @@ def masked_mean(seq, mask = None, dim = 1):
         mask = rearrange(mask, 'b n -> b n 1')
 
     masked_seq = seq.masked_fill(~mask, 0.)
-    numer = masked_seq.sum(dim = dim)
-    denom = mask.sum(dim = dim)
+    numer = masked_seq.sum(dim = dim, keepdim = keepdim)
+    denom = mask.sum(dim = dim, keepdim = keepdim)
 
     masked_mean = numer / denom.clamp(min = 1e-3)
     masked_mean = masked_mean.masked_fill(denom == 0, 0.)

@@ -115,6 +115,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 
 - [x] clone base transformer with separate lora for critic
 - [x] also allow for non-LoRA based finetuning
+- [x] redo normalize to be able to have a masked version, not sure if anyone will ever use per token rewards / values, but good practice to implement
 
 - [ ] add huggingface accelerate and test out wandb instrumentation
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
@@ -122,7 +123,6 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] write the memory in PPO to memmapped numpy file
 - [ ] get sampling with variable lengthed prompts working, even if it is not needed given bottleneck is human feedback
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
-- [ ] redo normalize to be able to have a masked version
 
 ## Appreciation
 

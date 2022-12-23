@@ -61,13 +61,18 @@ def create_dataloader(data, batch_size, shuffle = True, device = None, **kwargs)
 def exists(val):
     return val is not None
 
-def normalize(t, eps = 1e-5, dim = None):
-    kwargs = dict()
-    if exists(dim):
-        kwargs = dict(dim = dim, keepdim = True)
+def default(val, d):
+    return val if exists(val) else d
 
-    var = torch.var(t, unbiased = False, **kwargs)
-    return (t - t.mean(**kwargs)) * var.clamp(min = eps).rsqrt()
+def masked_normalize(t, eps = 1e-5, mask = None, dim = None):
+    dim = default(dim, tuple(range(t.ndim)))
+    kwargs = dict(dim = dim, keepdim = True)
+
+    mean = masked_mean(t, mask = mask, **kwargs)
+    mean_centered = t - mean
+    var = masked_mean(mean_centered ** 2, mask = mask, **kwargs)
+
+    return mean_centered * var.clamp(min = eps).rsqrt()
 
 def pad_sequence_fixed(sequences, *args, **kwargs):
     first_el = sequences[0]
@@ -326,18 +331,21 @@ class RLHFTrainer(nn.Module):
 
                 # handle non-pooled values
 
+                normalize_kwargs = dict()
+
                 if old_values.ndim == 2:
                     old_values = old_values[:, -action_len:]
                     values = values[:, -action_len:]
                     rewards = rearrange(rewards, 'b -> b 1')
+                    normalize_kwargs = dict(dim = -1, mask = action_masks[:, -action_len:])
 
-                if values.ndim != rewards.ndim:
+                if values.ndim < rewards.ndim:
                     values = values[..., None]
 
                 # calculate clipped surrogate objective, classic PPO loss
 
                 ratios = (action_log_probs - old_log_probs).exp()
-                advantages = normalize(rewards - old_values, dim = -1)
+                advantages = masked_normalize(rewards - old_values, **normalize_kwargs)
 
                 if advantages.ndim == 1:
                     advantages = rearrange(advantages, 'b -> b 1')
