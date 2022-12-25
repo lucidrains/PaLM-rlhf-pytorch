@@ -117,7 +117,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [x] also allow for non-LoRA based finetuning
 - [x] redo normalize to be able to have a masked version, not sure if anyone will ever use per token rewards / values, but good practice to implement
 
-- [ ] add huggingface accelerate and test out wandb instrumentation
+- [ ] add Hugging Face accelerate and test out wandb instrumentation
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
 - [ ] test the system using a pretrained sentiment network as reward model
 - [ ] write the memory in PPO to memmapped numpy file
@@ -128,7 +128,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 
 - <a href="https://stability.ai/">Stability.ai</a> for the generous sponsorship to work on cutting edge artificial intelligence research
 
-- <a href="https://huggingface.co/">🤗 Huggingface</a> and <a href="https://carper.ai/">CarperAI</a> for penning the blog post <a href="https://huggingface.co/blog/rlhf">Illustrating Reinforcement Learning from Human Feedback (RLHF)</a>, and the former also for their <a href="https://huggingface.co/docs/accelerate/index">accelerate</a> library
+- <a href="https://huggingface.co/">🤗 Hugging Face</a> and <a href="https://carper.ai/">CarperAI</a> for penning the blog post <a href="https://huggingface.co/blog/rlhf">Illustrating Reinforcement Learning from Human Feedback (RLHF)</a>, and the former also for their <a href="https://huggingface.co/docs/accelerate/index">accelerate</a> library
 
 ## Citations
 
