@@ -75,9 +75,9 @@ from palm_rlhf_pytorch import PaLM, RewardModel, RLHFTrainer
 # load your pretrained palm
 
 palm = PaLM(
-    num_tokens=256,
-    dim=512,
-    depth=8
+    num_tokens = 20000,
+    dim = 512,
+    depth = 12
 ).cuda()
 
 palm.load('./path/to/pretrained/palm.pt')

@@ -5,7 +5,7 @@ from collections import deque, namedtuple
 from random import randrange
 
 from beartype import beartype
-from typing import List, Optional, Callable, Deque
+from beartype.typing import List, Optional, Callable, Deque
 
 import torch
 from torch import nn
@@ -134,6 +134,8 @@ class RLHFTrainer(nn.Module):
         critic_lr = 1e-4,
         actor_wd = 0.,
         critic_wd = 0.,
+        actor_adam_eps = 1e-7,
+        critic_adam_eps = 1e-7,
         actor_lora = True,
         critic_lora = True,
         critic_pooled_values = True,
@@ -195,8 +197,8 @@ class RLHFTrainer(nn.Module):
 
         # optimizers
 
-        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas)
-        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas)
+        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas, eps = actor_adam_eps)
+        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas, eps = critic_adam_eps)
 
         # ppo hyperparams
 
