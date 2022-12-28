@@ -139,6 +139,8 @@ class RLHFTrainer(nn.Module):
         actor_lora = True,
         critic_lora = True,
         critic_pooled_values = True,
+        actor_dropout = 0.,
+        critic_dropout = 0.,
         betas = (0.9, 0.999),
         max_norm = None,
         eps_clip = 0.2,
@@ -180,7 +182,9 @@ class RLHFTrainer(nn.Module):
                 palm = palm,
                 actor_lora = actor_lora,
                 critic_lora = critic_lora,
-                pooled_values = critic_pooled_values
+                pooled_values = critic_pooled_values,
+                actor_dropout = actor_dropout,
+                critic_dropout = critic_dropout
             ).to(palm.device)
 
         self.actor_critic = actor_critic
