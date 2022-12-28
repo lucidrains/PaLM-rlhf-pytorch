@@ -1,3 +1,4 @@
+import math
 import copy
 from pathlib import Path
 from collections import namedtuple
@@ -278,7 +279,8 @@ class PaLM(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         lora_r = 8,
-        finetune_scopes = tuple()
+        finetune_scopes = tuple(),
+        cross_entropy_ignore_index = 0
     ):
         super().__init__()
         self.dim = dim
@@ -316,6 +318,10 @@ class PaLM(nn.Module):
 
         for scope in finetune_scopes:
             self.add_finetune_params(scope)
+
+        # loss related
+
+        self.cross_entropy_ignore_index = cross_entropy_ignore_index
 
     @property
     def device(self):
@@ -452,7 +458,7 @@ class PaLM(nn.Module):
             return ret
 
         logits = rearrange(logits, 'b n c -> b c n')
-        return F.cross_entropy(logits, labels)
+        return F.cross_entropy(logits, labels, ignore_index = self.cross_entropy_ignore_index)
 
 # Reward Model - PaLM with a scalar head
 
@@ -590,6 +596,9 @@ class ActorCritic(nn.Module):
             nn.Linear(palm.dim, 1),
             Rearrange('... 1 -> ...')
         )
+
+        nn.init.zeros_(self.value_head[0].bias)
+        nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
 
     def actor_parameters(self):
         if not self.actor_lora:
