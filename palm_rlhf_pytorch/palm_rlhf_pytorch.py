@@ -329,7 +329,7 @@ class PaLM(nn.Module):
 
     def add_finetune_params(self, scope):
         assert scope not in self.finetune_modules, f'finetune scope {scope} already found'
-        dim, dim_head, heads, r = self.dim, self.dim_head, self.heads, self.lora_r
+        dim, dim_head, heads, r, device = self.dim, self.dim_head, self.heads, self.lora_r, self.device
 
         q_inner_dim = heads * dim_head
         kv_inner_dim = dim_head
@@ -344,7 +344,36 @@ class PaLM(nn.Module):
                 LoRA(q_inner_dim, dim, r = r)    # wo
             ]))
 
-        self.finetune_modules[scope] = lora_modules
+        self.finetune_modules[scope] = lora_modules.to(device)
+
+    def remove_finetune_params(self, scope):
+        assert scope in self.finetune_modules, f'finetune scope {scope} not found'
+        return self.finetune_modules.pop(scope)
+
+    @torch.no_grad()
+    def merge_finetune_params(self, scope):
+        """ in the case one wants to merge the fine-tuned actor LORA parameters and do multiple rounds of fine tuning off different reward models """
+
+        assert scope in self.finetune_modules, f'finetune scope {scope} not found'
+
+        lora_modules = self.finetune_modules.pop(scope)
+
+        for layer, (lora_q, lora_k, lora_v, lora_o) in zip(self.layers, lora_modules):
+            block = layer.fn
+
+            fused_attn_ff_weight = block.fused_attn_ff_proj.weight
+            attn_out_weight = block.attn_out.weight
+
+            fused_proj_out_dim = fused_attn_ff_weight.shape[0]
+
+            lora_qkv_weight, _ = pack([lora_q.weight, lora_k.weight, lora_v.weight], 'i *')
+            lora_qkv_weight = F.pad(lora_qkv_weight, (0, fused_proj_out_dim - lora_qkv_weight.shape[1]))
+
+            lora_qkv_weight = rearrange(lora_qkv_weight, 'i o -> o i')
+            lora_o_weight = rearrange(lora_o.weight, 'i o -> o i')
+
+            fused_attn_ff_weight.add_(lora_qkv_weight)
+            attn_out_weight.add_(lora_o_weight)
 
     # researcher train palm parameters first
     # before finetuning
