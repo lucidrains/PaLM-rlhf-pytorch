@@ -204,18 +204,12 @@ class ParallelTransformerBlock(nn.Module):
 
         if exists(finetune_modules):
             lora_q, lora_k, lora_v, lora_o = finetune_modules
-
-        if exists(lora_q):
             q = q + lora_q(x)
-
-        if exists(lora_k):
             k = k + lora_k(x)
-
-        if exists(lora_v):
             v = v + lora_v(x)
 
         # split heads
-        # they use multi-query singclasle-key-value attention, yet another Noam Shazeer paper
+        # they use multi-query single-key-value attention, yet another Noam Shazeer paper
         # they found no performance loss past a certain scale, and more efficient decoding obviously
         # https://arxiv.org/abs/1911.02150
 
@@ -332,6 +326,12 @@ class PaLM(nn.Module):
         assert path.exists()
         self.load_state_dict(torch.load(str(path)))
 
+    def set_dropout(self, dropout):
+        for module in self.layers.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = dropout
+        return self
+
     def add_finetune_params(self, scope):
         assert scope not in self.finetune_modules, f'finetune scope {scope} already found'
         dim, dim_head, heads, r = self.dim, self.dim_head, self.heads, self.lora_r
@@ -436,14 +436,14 @@ class PaLM(nn.Module):
         if exists(extra_embed):
             x = x + extra_embed
 
-        if exists(finetune_scope):
+        if exists(finetune_scope) and not disable_lora:
             assert finetune_scope in self.finetune_modules
             finetune_modules = self.finetune_modules[finetune_scope]
         else:
             finetune_modules = ((None,) * len(self.layers))
 
         for layer, finetune_modules in zip(self.layers, finetune_modules):
-            x = layer(x, finetune_modules = None)
+            x = layer(x, finetune_modules = finetune_modules)
 
         embeds = self.norm(x)
 
@@ -467,11 +467,14 @@ class RewardModel(nn.Module):
     def __init__(
         self,
         palm: PaLM,
+        dropout = 0.1,
         num_binned_output = 0.,
         reward_lora_scope = 'reward'
     ):
         super().__init__()
+
         self.palm = copy.deepcopy(palm)
+        self.palm.set_dropout(dropout)
 
         self.palm.add_finetune_params(reward_lora_scope)
         self.reward_lora_scope = reward_lora_scope
@@ -569,7 +572,9 @@ class ActorCritic(nn.Module):
         actor_lora = True,
         critic_lora = True,
         actor_lora_scope = 'actor',
-        critic_lora_scope = 'critic'
+        critic_lora_scope = 'critic',
+        actor_dropout = 0.,
+        critic_dropout = 0.
     ):
         super().__init__()
         self.actor_palm = palm
@@ -578,6 +583,9 @@ class ActorCritic(nn.Module):
 
         if not exists(self.critic_palm):
             self.critic_palm = copy.deepcopy(palm)
+
+        self.actor_palm.set_dropout(actor_dropout)
+        self.critic_palm.set_dropout(critic_dropout)
 
         self.actor_lora = actor_lora
         self.critic_lora = critic_lora
