@@ -138,6 +138,8 @@ class RLHFTrainer(nn.Module):
         critic_adam_eps = 1e-7,
         actor_lora = True,
         critic_lora = True,
+        actor_lora_r = 8,
+        critic_lora_r = 8,
         critic_pooled_values = True,
         actor_dropout = 0.,
         critic_dropout = 0.,
@@ -182,6 +184,8 @@ class RLHFTrainer(nn.Module):
                 palm = palm,
                 actor_lora = actor_lora,
                 critic_lora = critic_lora,
+                actor_lora_r = actor_lora_r,
+                critic_lora_r = critic_lora_r,
                 pooled_values = critic_pooled_values,
                 actor_dropout = actor_dropout,
                 critic_dropout = critic_dropout
