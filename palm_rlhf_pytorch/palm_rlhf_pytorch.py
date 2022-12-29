@@ -119,7 +119,8 @@ class ParallelTransformerBlock(nn.Module):
         heads = 8,
         ff_mult = 4,
         attn_dropout = 0.,
-        ff_dropout = 0.
+        ff_dropout = 0.,
+        xpos_scale_base = 512
     ):
         super().__init__()
         self.norm = LayerNorm(dim)
@@ -132,7 +133,7 @@ class ParallelTransformerBlock(nn.Module):
         self.scale = dim_head**-0.5
         self.causal = causal
 
-        self.rotary_emb = RotaryEmbedding(dim_head)
+        self.rotary_emb = RotaryEmbedding(dim_head, scale_base = xpos_scale_base)
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
 
@@ -268,6 +269,7 @@ class PaLM(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         lora_r = 8,
+        rotary_xpos_scale_base = 512,
         finetune_scopes = tuple(),
         cross_entropy_ignore_index = 0
     ):
@@ -288,7 +290,8 @@ class PaLM(nn.Module):
                 heads = heads,
                 ff_mult = ff_mult,
                 attn_dropout = attn_dropout,
-                ff_dropout = ff_dropout
+                ff_dropout = ff_dropout,
+                xpos_scale_base = rotary_xpos_scale_base
             ))
 
             self.layers.append(block)
