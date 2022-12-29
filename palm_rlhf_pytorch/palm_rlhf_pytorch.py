@@ -526,7 +526,7 @@ class RewardModel(nn.Module):
     def finetune_parameters(self):
         return [
             *self.to_pred.parameters(),
-            *palm.finetune_parameters(self.reward_lora_scope)
+            *self.palm.finetune_parameters(self.reward_lora_scope)
         ]
 
     def forward(
