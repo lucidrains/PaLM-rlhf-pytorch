@@ -493,6 +493,7 @@ class RewardModel(nn.Module):
         palm: PaLM,
         dropout = 0.1,
         num_binned_output = 0.,
+        use_lora = True,
         reward_lora_scope = 'reward'
     ):
         super().__init__()
@@ -500,8 +501,10 @@ class RewardModel(nn.Module):
         self.palm = copy.deepcopy(palm)
         self.palm.set_dropout(dropout)
 
-        self.palm.add_finetune_params(reward_lora_scope)
-        self.reward_lora_scope = reward_lora_scope
+        self.reward_lora_scope = reward_lora_scope if use_lora else None
+
+        if exists(self.reward_lora_scope):
+            self.palm.add_finetune_params(reward_lora_scope)
 
         dim = palm.dim
 
@@ -526,7 +529,7 @@ class RewardModel(nn.Module):
     def finetune_parameters(self):
         return [
             *self.to_pred.parameters(),
-            *palm.finetune_parameters(self.reward_lora_scope)
+            *(self.palm.finetune_parameters(self.reward_lora_scope) if exists(self.reward_lora_scope) else self.palm.parameters())
         ]
 
     def forward(
