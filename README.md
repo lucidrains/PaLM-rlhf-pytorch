@@ -4,9 +4,13 @@ Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of th
 
 If you are interested in replicating something like ChatGPT out in the open, please consider joining <a href="https://discord.gg/xBPBXfcFHd">Laion <img alt="Join us on Discord" src="https://img.shields.io/discord/823813159592001537?color=5865F2&logo=discord&logoColor=white"></a>
 
-<a href="https://www.youtube.com/watch?v=sswA4j_IUxg">Yannic Kilcher</a> is also working on an <a href="https://github.com/LAION-AI/Open-Assistant">open sourced implementation</a>!
+## Community
 
-<a href="https://www.youtube.com/watch?v=SWwQ3k-DWyo">AI Coffeebreak w/ Letitia</a>
+<a href="https://carper.ai/">CarperAI</a> had been working on <a href="https://github.com/CarperAI/trlx">an RLHF framework</a> for large language models
+
+<a href="https://www.youtube.com/watch?v=sswA4j_IUxg">Yannic Kilcher</a> is also working on an <a href="https://github.com/LAION-AI/Open-Assistant">open sourced implementation</a>
+
+<a href="https://www.youtube.com/watch?v=SWwQ3k-DWyo">AI Coffeebreak w/ Letitia</a> | <a href="https://www.youtube.com/watch?v=NpmnWgQgcsA">Code Emporium</a>
 
 ## Appreciation
 
@@ -135,7 +139,8 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] write the memory in PPO to memmapped numpy file
 - [ ] get sampling with variable lengthed prompts working, even if it is not needed given bottleneck is human feedback
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
-
+- [ ] incorporate some learning points from Sparrow, given Letitia's video
+- [ ] simple web interface with django + htmx for collecting human feedback
 
 ## Citations
 
