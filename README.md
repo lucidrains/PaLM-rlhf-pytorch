@@ -141,6 +141,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
 - [ ] incorporate some learning points from Sparrow, given Letitia's video
 - [ ] simple web interface with django + htmx for collecting human feedback
+- [ ] equip with <a href="https://github.com/hazyResearch/flash-attention">the best attention</a>
 
 ## Citations
 
