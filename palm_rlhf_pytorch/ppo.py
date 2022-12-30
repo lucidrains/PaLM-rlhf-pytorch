@@ -471,15 +471,15 @@ class RLHFTrainer(nn.Module):
 
                 # store memory for learning
 
-                memories.append(Memory(
-                    detach_to_cpu_(sequence),
-                    detach_to_cpu_(prompt_mask),
-                    detach_to_cpu_(mask),
-                    detach_to_cpu_(action_prob),
-                    detach_to_cpu_(action_log_prob),
-                    detach_to_cpu_(reward),
-                    detach_to_cpu_(value)
-                ))
+                memories.append(Memory(*map(detach_to_cpu_, (
+                    sequence,
+                    prompt_mask,
+                    mask,
+                    action_prob,
+                    action_log_prob,
+                    reward,
+                    value
+                ))))
 
                 # learn from the stored memories
 
