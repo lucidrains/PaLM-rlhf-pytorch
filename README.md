@@ -4,6 +4,8 @@ Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of th
 
 If you are interested in replicating something like ChatGPT out in the open, please consider joining <a href="https://discord.gg/xBPBXfcFHd">Laion <img alt="Join us on Discord" src="https://img.shields.io/discord/823813159592001537?color=5865F2&logo=discord&logoColor=white"></a>
 
+This repository has gone viral without my permission. Next time, if you are promoting my unfinished repositories (notice the work in progress flag) for twitter engagement or eyeballs, at least (1) do your research or (2) be totally transparent with your readers about the capacity of the repository without resorting to clickbait. (1) I was not the first, CarperAI had been working on RLHF months before, link below. (2) There is no trained model. This is just the ship and overall map. We still need millions of dollars of compute + data to sail to the correct point in high dimensional parameter space. Even then, you need professional sailors (like Robin Rombach of Stable Diffusion fame) to actually guide the ship through turbulent times to that point.
+
 ## Community
 
 <a href="https://carper.ai/">CarperAI</a> had been working on <a href="https://github.com/CarperAI/trlx">an RLHF framework</a> for large language models
