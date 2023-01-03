@@ -687,14 +687,17 @@ class ActorCritic(nn.Module):
         prompt_mask = torch.arange(sequence.shape[-1], device = state.device) < state_len
         prompt_mask = repeat(prompt_mask, 'n -> b n', b = sequence.shape[0])
 
+        action_mask = ~prompt_mask
+
         mask = None
         if exists(eos_token):
             mask = ((sequence == eos_token).cumsum(dim = -1) == 0)
             mask = F.pad(mask, (1, -1), value = True) # include eos token
+            action_mask &= mask
 
         action_logits, value = self.forward(
             sequence,
-            mask = mask,
+            mask = action_mask,
             return_values = return_values
         )        
 
