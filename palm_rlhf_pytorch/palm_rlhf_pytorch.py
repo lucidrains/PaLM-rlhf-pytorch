@@ -86,7 +86,7 @@ class RotaryEmbedding(nn.Module):
         freqs = torch.cat((freqs, freqs), dim = -1)
 
         if not self.use_xpos:
-            return freqs, 1
+            return freqs, torch.ones(1, device = device)
 
         power = (t - (seq_len // 2)) / self.scale_base
         scale = self.scale ** rearrange(power, 'n -> n 1')
@@ -182,6 +182,7 @@ class ParallelTransformerBlock(nn.Module):
     def forward(
         self,
         x,
+        mask = None,
         finetune_modules = None
     ):
         """
@@ -231,6 +232,12 @@ class ParallelTransformerBlock(nn.Module):
         # similarity
 
         sim = einsum("b h i d, b j d -> b h i j", q, k)
+
+        # key padding mask
+
+        if exists(mask):
+            mask = rearrange(mask, 'b j -> b 1 1 j')
+            sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
         # causal mask
 
@@ -285,6 +292,7 @@ class PaLM(nn.Module):
         self.dim = dim
         self.dim_head = dim_head
         self.heads = heads
+        self.causal = causal
         self.num_tokens = num_tokens
 
         self.token_emb = nn.Embedding(num_tokens, dim)
@@ -466,10 +474,19 @@ class PaLM(nn.Module):
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
 
+        # mask if encoder
+        # treat any token ids that are negative as tokens to mask out - only needed if not autoregressive
+
+        mask = (x < 0) if not self.causal else None
+
+        # get token embedding
+
         x = self.token_emb(x)
 
         if exists(extra_embed):
             x = x + extra_embed
+
+        # finetune modules
 
         if exists(finetune_scope) and not disable_lora:
             assert finetune_scope in self.finetune_modules
@@ -477,13 +494,19 @@ class PaLM(nn.Module):
         else:
             finetune_modules = ((None,) * len(self.layers))
 
+        # parallel attention / ff blocks, passing in finetuning loras
+
         for layer, finetune_modules in zip(self.layers, finetune_modules):
-            x = layer(x, finetune_modules = finetune_modules)
+            x = layer(x, mask = mask, finetune_modules = finetune_modules)
+
+        # final norm
 
         embeds = self.norm(x)
 
         if return_only_embedding:
             return embeds
+
+        # to logits
 
         logits = self.to_logits(x)
 
