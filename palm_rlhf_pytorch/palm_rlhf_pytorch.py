@@ -70,11 +70,12 @@ class Residual(nn.Module):
 # https://arxiv.org/abs/2212.10554v1
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, scale_base = 512):
+    def __init__(self, dim, scale_base = 512, use_xpos = True):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
 
+        self.use_xpos = use_xpos
         self.scale_base = scale_base
         scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
         self.register_buffer('scale', scale)
@@ -83,6 +84,9 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(seq_len, device = device).type_as(self.inv_freq)
         freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
         freqs = torch.cat((freqs, freqs), dim = -1)
+
+        if not self.use_xpos:
+            return freqs, 1
 
         power = (t - (seq_len // 2)) / self.scale_base
         scale = self.scale ** rearrange(power, 'n -> n 1')
@@ -123,6 +127,7 @@ class ParallelTransformerBlock(nn.Module):
         ff_mult = 4,
         attn_dropout = 0.,
         ff_dropout = 0.,
+        use_xpos = True,
         xpos_scale_base = 512
     ):
         super().__init__()
@@ -136,7 +141,7 @@ class ParallelTransformerBlock(nn.Module):
         self.scale = dim_head**-0.5
         self.causal = causal
 
-        self.rotary_emb = RotaryEmbedding(dim_head, scale_base = xpos_scale_base)
+        self.rotary_emb = RotaryEmbedding(dim_head, scale_base = xpos_scale_base, use_xpos = use_xpos and causal)
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
 
