@@ -477,7 +477,11 @@ class PaLM(nn.Module):
         # mask if encoder
         # treat any token ids that are negative as tokens to mask out - only needed if not autoregressive
 
-        mask = (x < 0) if not self.causal else None
+        if not self.causal:
+            mask = x >= 0
+            x = x.masked_fill(~mask, 0)
+        else:
+            mask = None
 
         # get token embedding
 
