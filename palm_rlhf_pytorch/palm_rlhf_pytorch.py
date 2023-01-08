@@ -2,6 +2,7 @@ import math
 import copy
 from pathlib import Path
 from collections import namedtuple
+from itertools import zip_longest
 
 from tqdm import tqdm
 from beartype import beartype
@@ -415,7 +416,6 @@ class PaLM(nn.Module):
         temperature = 1.,
         filter_logits_fn = top_k,
         filter_thres = 0.9,
-        trainable = False,
         pad_value = 0.,
         eos_token = None,
         return_seq_without_prompt = True,
@@ -456,10 +456,10 @@ class PaLM(nn.Module):
 
         out, = unpack(out, leading_dims, '* n')
 
-        if return_seq_without_prompt:
-            out = out[..., n:]
+        if not return_seq_without_prompt:
+            return out
 
-        return out
+        return out[..., n:]
 
     def forward(
         self,
@@ -492,15 +492,14 @@ class PaLM(nn.Module):
 
         # finetune modules
 
+        finetune_modules = tuple()
         if exists(finetune_scope) and not disable_lora:
             assert finetune_scope in self.finetune_modules
             finetune_modules = self.finetune_modules[finetune_scope]
-        else:
-            finetune_modules = ((None,) * len(self.layers))
 
         # parallel attention / ff blocks, passing in finetuning loras
 
-        for layer, finetune_modules in zip(self.layers, finetune_modules):
+        for layer, finetune_modules in zip_longest(self.layers, finetune_modules):
             x = layer(x, mask = mask, finetune_modules = finetune_modules)
 
         # final norm
