@@ -53,10 +53,9 @@ model = PaLM(
 # prepare enwik8 data
 
 with gzip.open("./data/enwik8.gz") as file:
-    X = np.fromstring(file.read(int(95e6)), dtype=np.uint8)
-    trX, vaX = np.split(X, [int(90e6)])
-    data_train, data_val = torch.from_numpy(trX), torch.from_numpy(vaX)
-
+    data = np.frombuffer(file.read(int(95e6)), dtype=np.uint8).copy()
+    np_train, np_valid = np.split(data, [int(90e6)])
+    data_train, data_val = torch.from_numpy(np_train), torch.from_numpy(np_valid)
 
 class TextSamplerDataset(Dataset):
     def __init__(self, data, seq_len):

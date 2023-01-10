@@ -1,4 +1,6 @@
+import math
 from pathlib import Path
+import copy
 from tqdm import tqdm
 from functools import partial
 from collections import deque, namedtuple
@@ -16,12 +18,166 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 from einops import rearrange, repeat
+from einops.layers.torch import Rearrange
 
-from palm_rlhf_pytorch.palm_rlhf_pytorch import PaLM, RewardModel, ActorCritic
+from palm_rlhf_pytorch.palm import PaLM
+from palm_rlhf_pytorch.reward import RewardModel
 from palm_rlhf_pytorch.optimizer import get_optimizer
-from palm_rlhf_pytorch.utils import masked_mean
+from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
 
 from accelerate import Accelerator
+
+# actor critic - PaLM with lora
+
+PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
+    'actions',
+    'sequence',
+    'mask',
+    'prompt_mask',
+    'action_logits',
+    'values'
+])
+
+@beartype
+class ActorCritic(nn.Module):
+    def __init__(
+        self,
+        palm: PaLM,
+        critic_palm: Optional[PaLM] = None,
+        pooled_values = False,
+        actor_lora = True,
+        critic_lora = True,
+        actor_lora_r = 8,
+        critic_lora_r = 8,
+        actor_lora_scope = 'actor',
+        critic_lora_scope = 'critic',
+        actor_dropout = 0.,
+        critic_dropout = 0.
+    ):
+        super().__init__()
+        self.actor_palm = palm
+
+        self.critic_palm = critic_palm
+
+        if not exists(self.critic_palm):
+            self.critic_palm = copy.deepcopy(palm)
+
+        self.actor_palm.set_dropout(actor_dropout)
+        self.critic_palm.set_dropout(critic_dropout)
+
+        self.actor_lora = actor_lora
+        self.critic_lora = critic_lora
+
+        self.actor_lora_scope = actor_lora_scope if actor_lora else None
+        self.critic_lora_scope = critic_lora_scope if critic_lora else None
+
+        if self.actor_lora:
+            self.actor_palm.add_finetune_params(actor_lora_scope, lora_r = actor_lora_r)
+
+        if self.critic_lora:
+            self.critic_palm.add_finetune_params(critic_lora_scope, lora_r = critic_lora_r)
+
+        self.pooled_values = pooled_values
+        self.value_head = nn.Sequential(
+            nn.Linear(palm.dim, 1),
+            Rearrange('... 1 -> ...')
+        )
+
+        nn.init.zeros_(self.value_head[0].bias)
+        nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
+
+    def actor_parameters(self):
+        if not self.actor_lora:
+            return self.actor_palm.parameters()
+
+        return [
+            *self.actor_palm.finetune_parameters(self.actor_lora_scope)
+        ]
+
+    def critic_parameters(self):
+        if not self.actor_lora:
+            return [*self.critic_palm.parameters(), *self.value_head.parameters()]
+
+        return [
+            *self.critic_palm.finetune_parameters(self.critic_lora_scope),
+            *self.value_head.parameters()
+        ]
+
+    @torch.no_grad()
+    @eval_decorator
+    def generate(
+        self,
+        state,
+        max_seq_len,
+        eos_token = None,
+        return_values = False,
+        **kwargs
+    ):
+        actions = self.actor_palm.generate(
+            max_seq_len,
+            prompt = state,       
+            eos_token = eos_token,     
+            finetune_scope = self.actor_lora_scope,
+            use_tqdm = True,
+            **kwargs
+        )
+
+        sequence = torch.cat((state, actions), dim = -1)
+        action_len = actions.shape[-1]
+        state_len = state.shape[-1]
+
+        prompt_mask = torch.arange(sequence.shape[-1], device = state.device) < state_len
+        prompt_mask = repeat(prompt_mask, 'n -> b n', b = sequence.shape[0])
+
+        action_mask = ~prompt_mask
+
+        mask = None
+        if exists(eos_token):
+            mask = ((sequence == eos_token).cumsum(dim = -1) == 0)
+            mask = F.pad(mask, (1, -1), value = True) # include eos token
+            action_mask &= mask
+
+        action_logits, value = self.forward(
+            sequence,
+            mask = action_mask,
+            return_values = return_values
+        )        
+
+        return PPOActionCriticReturn(
+            actions,
+            sequence,
+            mask,
+            prompt_mask,
+            action_logits,
+            value
+        )
+
+    def forward(
+        self,
+        x,
+        mask = None,
+        return_values = True
+    ):
+        action_logits = self.actor_palm(
+            x,
+            finetune_scope = self.actor_lora_scope
+        )
+
+        if not return_values:
+            return action_logits, None
+
+        critic_embeds = self.critic_palm(
+            x,
+            return_only_embedding = True,
+            finetune_scope = self.critic_lora_scope
+        )
+
+        if self.pooled_values:
+            critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
+
+        values = self.value_head(critic_embeds)
+
+        return action_logits, values
 
 # data
 
