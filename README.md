@@ -4,7 +4,7 @@
 
 ## PaLM + RLHF - Pytorch (wip)
 
-Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of the PaLM architecture. Maybe I'll add retrieval functionality too, à la <a href="https://github.com/lucidrains/RETRO-pytorch">RETRO</a>
+Implementation of RLHF (Reinforcement Learning with Human Feedback) on top of the PaLM architecture.
 
 If you are interested in replicating something like ChatGPT out in the open, please consider joining <a href="https://discord.gg/xBPBXfcFHd">Laion <img alt="Join us on Discord" src="https://img.shields.io/discord/823813159592001537?color=5865F2&logo=discord&logoColor=white"></a>
 
@@ -151,6 +151,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
 - [ ] incorporate some learning points from Sparrow, given Letitia's video
 - [ ] simple web interface with django + htmx for collecting human feedback
+- [ ] consider extending with <a href="https://arxiv.org/abs/2212.08153">FIDO</a>
 - [ ] equip with <a href="https://github.com/hazyResearch/flash-attention">the best attention</a>
 
 ## Citations
