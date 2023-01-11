@@ -25,6 +25,7 @@ class PaLMEncDec(nn.Module):
         num_tokens,
         depth,
         enc_depth = None,
+        dec_default_start_token_id = None,
         causal = True,
         dim_head = 64,
         heads = 8,
@@ -34,9 +35,11 @@ class PaLMEncDec(nn.Module):
         lora_r = 8,
         rotary_xpos_scale_base = 512,
         finetune_scopes = tuple(),
-        cross_entropy_ignore_index = 0
+        cross_entropy_ignore_index = 0,
     ):
         super().__init__()
+        self.dim = dim
+
         enc_depth = default(enc_depth, depth)
 
         palm_kwargs = dict(
@@ -62,6 +65,7 @@ class PaLMEncDec(nn.Module):
             cross_attend = True,
             rotary_xpos_scale_base = rotary_xpos_scale_base,
             cross_entropy_ignore_index = cross_entropy_ignore_index,
+            default_start_token_id = dec_default_start_token_id,
             **palm_kwargs
         )
 
@@ -95,10 +99,10 @@ class PaLMEncDec(nn.Module):
         self.decoder.merge_finetune_params(scope)
 
     def palm_parameters(self):
-        return set(self.decoder.palm_parameters()) + set(self.encoder.palm_parameters())
+        return set(self.decoder.palm_parameters()) | set(self.encoder.palm_parameters())
 
     def finetune_parameters(self, scope = 'default'):
-        return set(self.decoder.finetune_parameters(scope = scope)) + set(self.encoder.finetune_parameters(scope = scope))
+        return set(self.decoder.finetune_parameters(scope = scope)) | set(self.encoder.finetune_parameters(scope = scope))
 
     # generate function
 
@@ -117,14 +121,14 @@ class PaLMEncDec(nn.Module):
         eos_token = None,
         return_seq_without_prompt = True,
         use_tqdm = False,
+        extra_prompt_embed = None,
         **kwargs
     ):
         prompt_embed, prompt_mask = self.encode_prompt(
             prompt,
             prompt_mask,
-            disable_lora = disable_lora,
-            finetune_scope = finetune_scope,
-            extra_prompt_embed = extra_prompt_embed
+            extra_prompt_embed = extra_prompt_embed,
+            **kwargs
         )
 
         generated = self.decoder.generate(
@@ -138,7 +142,8 @@ class PaLMEncDec(nn.Module):
             return_seq_without_prompt = return_seq_without_prompt,
             use_tqdm = use_tqdm,
             context = prompt_embed,
-            context_mask = prompt_mask
+            context_mask = prompt_mask,
+            **kwargs
         )
 
         return generated
@@ -170,9 +175,9 @@ class PaLMEncDec(nn.Module):
 
     def forward(
         self,
-        x,
-        *,
         prompt,
+        *,
+        decoder_seq = None,
         prompt_mask = None,
         return_loss = False,
         disable_lora = False,
@@ -192,7 +197,7 @@ class PaLMEncDec(nn.Module):
         )
 
         return self.decoder(
-            x,
+            prompt = decoder_seq,
             context = prompt_embed,
             context_mask = prompt_mask,
             return_loss = return_loss,

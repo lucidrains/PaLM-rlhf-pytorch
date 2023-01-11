@@ -24,7 +24,9 @@ def exists(val):
     return val is not None
 
 def default(val, d):
-    return val if exists(val) else d
+    if exists(val):
+        return val
+    return d() if callable(d) else d
 
 def identity(t, *args, **kwargs):
     return t
@@ -475,6 +477,17 @@ class PaLM(nn.Module):
         assert scope in self.finetune_modules, f'finetune parameters of scope {scope} not found'
         return self.finetune_modules[scope].parameters()
 
+    # default tokens
+
+    @property
+    def default_token_ids(self):
+        device = self.device
+
+        if exists(self.default_start_token_id):
+            return torch.full((1, 1), self.default_start_token_id, device = device)
+
+        return torch.randint(0, self.num_tokens, (1, 1), device = device)
+
     # generate function
 
     @torch.no_grad()
@@ -495,12 +508,7 @@ class PaLM(nn.Module):
         assert self.causal
 
         if not exists(prompt):
-            if exists(self.default_start_token_id):
-                prompt = torch.full((1, 1), self.default_start_token_id)
-            else:
-                prompt = torch.randint(0, self.num_tokens, (1, 1))
-
-            prompt = prompt.to(self.device)
+            prompt = self.default_token_ids
             return_seq_without_prompt = False
 
         prompt, leading_dims = pack([prompt], '* n')
@@ -539,7 +547,7 @@ class PaLM(nn.Module):
 
     def forward(
         self,
-        x,
+        prompt,
         mask = None,
         context = None,
         context_mask = None,
@@ -550,6 +558,8 @@ class PaLM(nn.Module):
         return_only_embedding = False,
         return_logits_with_embedding = False
     ):
+        x = default(prompt, lambda: self.default_token_ids)
+
         assert not (exists(context) and not self.cross_attend)
 
         if return_loss:

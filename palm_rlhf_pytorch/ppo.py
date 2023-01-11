@@ -7,7 +7,7 @@ from collections import deque, namedtuple
 from random import randrange
 
 from beartype import beartype
-from beartype.typing import List, Optional, Callable, Deque
+from beartype.typing import List, Optional, Callable, Deque, Union
 
 import torch
 from torch import nn
@@ -21,6 +21,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 
 from palm_rlhf_pytorch.palm import PaLM
+from palm_rlhf_pytorch.palm_enc_dec import PaLMEncDec
 from palm_rlhf_pytorch.reward import RewardModel
 from palm_rlhf_pytorch.optimizer import get_optimizer
 from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
@@ -42,8 +43,8 @@ PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
 class ActorCritic(nn.Module):
     def __init__(
         self,
-        palm: PaLM,
-        critic_palm: Optional[PaLM] = None,
+        palm: Union[PaLM, PaLMEncDec],
+        critic_palm: Optional[Union[PaLM, PaLMEncDec]] = None,
         pooled_values = False,
         actor_lora = True,
         critic_lora = True,
@@ -61,6 +62,9 @@ class ActorCritic(nn.Module):
 
         if not exists(self.critic_palm):
             self.critic_palm = copy.deepcopy(palm)
+
+        self.actor_is_enc_dec = isinstance(self.actor_palm, PaLMEncDec)
+        self.critic_is_enc_dec = isinstance(self.critic_palm, PaLMEncDec)
 
         self.actor_palm.set_dropout(actor_dropout)
         self.critic_palm.set_dropout(critic_dropout)
@@ -141,7 +145,7 @@ class ActorCritic(nn.Module):
             sequence,
             mask = action_mask,
             return_values = return_values
-        )        
+        )
 
         return PPOActionCriticReturn(
             actions,
@@ -159,7 +163,7 @@ class ActorCritic(nn.Module):
         return_values = True
     ):
         action_logits = self.actor_palm(
-            x,
+            prompt = x,
             finetune_scope = self.actor_lora_scope
         )
 
@@ -167,7 +171,7 @@ class ActorCritic(nn.Module):
             return action_logits, None
 
         critic_embeds = self.critic_palm(
-            x,
+            prompt = x,
             return_only_embedding = True,
             finetune_scope = self.critic_lora_scope
         )
@@ -283,7 +287,7 @@ class RLHFTrainer(nn.Module):
         prompts_path: Optional[str] = None,
         prompt_token_ids: Optional[torch.Tensor] = None,
         tokenizer: Callable = None,
-        palm: PaLM,
+        palm: Union[PaLM, PaLMEncDec],
         reward_model: RewardModel,
         actor_critic: Optional[ActorCritic] = None,
         actor_lr = 1e-4,
