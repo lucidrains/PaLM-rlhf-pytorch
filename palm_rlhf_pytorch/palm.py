@@ -479,14 +479,13 @@ class PaLM(nn.Module):
 
     # default tokens
 
-    @property
-    def default_token_ids(self):
+    def default_token_ids(self, batch = 1):
         device = self.device
 
         if exists(self.default_start_token_id):
-            return torch.full((1, 1), self.default_start_token_id, device = device)
+            return torch.full((batch, 1), self.default_start_token_id, device = device)
 
-        return torch.randint(0, self.num_tokens, (1, 1), device = device)
+        return torch.randint(0, self.num_tokens, (batch, 1), device = device)
 
     # generate function
 
@@ -503,12 +502,15 @@ class PaLM(nn.Module):
         eos_token = None,
         return_seq_without_prompt = True,
         use_tqdm = False,
+        context = None,
+        batch_size = 1,
         **kwargs
     ):
         assert self.causal
 
         if not exists(prompt):
-            prompt = self.default_token_ids
+            batch_size = context.shape[0] if exists(context) else batch_size
+            prompt = self.default_token_ids(batch = batch_size)
             return_seq_without_prompt = False
 
         prompt, leading_dims = pack([prompt], '* n')
@@ -519,7 +521,7 @@ class PaLM(nn.Module):
         sample_num_times = max(1, seq_len - prompt.shape[-1])
 
         for _ in wrapper_fn(range(sample_num_times)):
-            logits, embeds = self.forward(out, return_logits_with_embedding = True, **kwargs)
+            logits, embeds = self.forward(out, return_logits_with_embedding = True, context = context, **kwargs)
             logits, embeds = logits[:, -1], embeds[:, -1]
 
             if exists(filter_logits_fn):
@@ -558,7 +560,7 @@ class PaLM(nn.Module):
         return_only_embedding = False,
         return_logits_with_embedding = False
     ):
-        x = default(prompt, lambda: self.default_token_ids)
+        x = default(prompt, lambda: self.default_token_ids(batch = (context.shape[0] if exists(context) else 1)))
 
         assert not (exists(context) and not self.cross_attend)
 
