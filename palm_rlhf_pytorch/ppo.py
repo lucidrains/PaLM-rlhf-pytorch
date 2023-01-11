@@ -144,7 +144,8 @@ class ActorCritic(nn.Module):
         action_logits, value = self.forward(
             sequence,
             mask = action_mask,
-            return_values = return_values
+            return_values = return_values,
+            return_last_n_tokens = action_len
         )
 
         return PPOActionCriticReturn(
@@ -160,12 +161,16 @@ class ActorCritic(nn.Module):
         self,
         x,
         mask = None,
-        return_values = True
+        return_values = True,
+        return_last_n_tokens = None  # if not None, this would return only the last N of the sequence dimension (dimension 2)
     ):
         action_logits = self.actor_palm(
             prompt = x,
             finetune_scope = self.actor_lora_scope
         )
+
+        if exists(return_last_n_tokens):
+            action_logits = action_logits[:, -return_last_n_tokens:]
 
         if not return_values:
             return action_logits, None
@@ -180,6 +185,9 @@ class ActorCritic(nn.Module):
             critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
 
         values = self.value_head(critic_embeds)
+
+        if not self.pooled_values and exists(return_last_n_tokens):
+            values = values[:, -return_last_n_tokens:]
 
         return action_logits, values
 
@@ -287,7 +295,7 @@ class RLHFTrainer(nn.Module):
         prompts_path: Optional[str] = None,
         prompt_token_ids: Optional[torch.Tensor] = None,
         tokenizer: Callable = None,
-        palm: Union[PaLM, PaLMEncDec],
+        palm: PaLM,
         reward_model: RewardModel,
         actor_critic: Optional[ActorCritic] = None,
         actor_lr = 1e-4,
@@ -352,6 +360,8 @@ class RLHFTrainer(nn.Module):
             ).to(palm.device)
 
         self.actor_critic = actor_critic
+
+        assert actor_critic.actor_palm == palm
 
         self.reward_model = reward_model.eval()
 
@@ -476,17 +486,16 @@ class RLHFTrainer(nn.Module):
                 old_values
             ) in dl:
                 action_masks = ~prompt_masks & masks
+                action_len = old_log_probs.shape[-1]
 
                 action_logits, values = self.actor_critic(
                     sequences,
-                    mask = action_masks
+                    mask = action_masks,
+                    return_last_n_tokens = action_len
                 )
-
-                action_len = old_log_probs.shape[-1]
 
                 action_probs = action_logits.softmax(dim = -1)
                 action_log_probs = log_prob(action_probs, sequences)
-                action_log_probs = action_log_probs[:, -action_len:]
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
 
@@ -504,8 +513,6 @@ class RLHFTrainer(nn.Module):
                 normalize_kwargs = dict()
 
                 if old_values.ndim == 2:
-                    old_values = old_values[:, -action_len:]
-                    values = values[:, -action_len:]
                     rewards = rearrange(rewards, 'b -> b 1')
                     normalize_kwargs = dict(dim = -1, mask = action_masks[:, -action_len:])
 
