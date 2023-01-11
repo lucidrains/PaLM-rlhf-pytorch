@@ -25,7 +25,6 @@ class PaLMEncDec(nn.Module):
         num_tokens,
         depth,
         enc_depth = None,
-        dec_default_start_token_id = None,
         causal = True,
         dim_head = 64,
         heads = 8,
@@ -36,6 +35,7 @@ class PaLMEncDec(nn.Module):
         rotary_xpos_scale_base = 512,
         finetune_scopes = tuple(),
         cross_entropy_ignore_index = 0,
+        dec_default_start_token_id = None,
     ):
         super().__init__()
         self.dim = dim
