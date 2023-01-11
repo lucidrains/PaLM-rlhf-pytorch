@@ -259,6 +259,65 @@ class ParallelTransformerBlock(nn.Module):
 
         return attn_out + ff_out
 
+# cross attention
+
+class CrossAttention(nn.Module):
+    def __init__(
+        self,
+        dim,
+        dim_head = 64,
+        heads = 8,
+        dropout = 0.
+    ):
+        super().__init__()
+        inner_dim = heads * dim_head
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+
+        self.norm = LayerNorm(dim)
+        self.to_q = nn.Linear(dim, inner_dim, bias = False)
+        self.to_out = nn.Linear(inner_dim, dim, bias = False)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        x,
+        kv: Tuple[torch.Tensor, torch.Tensor],
+        context_mask = None
+    ):
+        x = self.norm(x)
+
+        # queries
+
+        q, k, v = self.to_q(x), *kv
+
+        # split out heads and scale queries
+
+        q = rearrange(q, 'b n (h d) -> b h n d', h = self.heads)
+        q = q * self.scale
+
+        # similarity
+
+        sim = einsum('b h i d, b j d -> b h i j', q, k)
+
+        # attention
+
+        attn = sim.softmax(dim = -1)
+        attn = self.dropout(attn)
+
+        # aggregate values
+
+        out = einsum('b h i j, b j d -> b h i d', attn, v)
+
+        # merge heads
+
+        out = rearrange(out, 'b h n d -> b n (h d)')
+
+        # combine heads
+
+        return self.to_out(out)
+
 # transformer
 
 @beartype
@@ -278,20 +337,28 @@ class PaLM(nn.Module):
         lora_r = 8,
         rotary_xpos_scale_base = 512,
         finetune_scopes = tuple(),
-        cross_entropy_ignore_index = 0
+        cross_entropy_ignore_index = 0,
+        cross_attend = False,
+        start_token_id = None
     ):
         super().__init__()
         self.dim = dim
         self.dim_head = dim_head
         self.heads = heads
         self.causal = causal
+
         self.num_tokens = num_tokens
+        self.start_token_id = start_token_id
+
+        self.cross_attend = cross_attend
 
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.layers = nn.ModuleList([])
 
+        self.to_cross_attn_key_values = nn.Linear(dim, dim_head * 2 * depth, bias = False)
+
         for _ in range(depth):
-            block = Residual(ParallelTransformerBlock(
+            self_attn_and_ff = Residual(ParallelTransformerBlock(
                 dim = dim,
                 causal = causal,
                 dim_head = dim_head,
@@ -302,7 +369,19 @@ class PaLM(nn.Module):
                 xpos_scale_base = rotary_xpos_scale_base
             ))
 
-            self.layers.append(block)
+            cross_attn = None
+            if cross_attend:
+                cross_attn = CrossAttention(
+                    dim = dim,
+                    dim_head = dim_head,
+                    heads = heads,
+                    dropout = attn_dropout
+                )
+
+            self.layers.append(nn.ModuleList([
+                cross_attn,
+                self_attn_and_ff
+            ]))
 
         self.norm = LayerNorm(dim)
         self.to_logits = nn.Linear(dim, num_tokens, bias=False)
@@ -369,7 +448,7 @@ class PaLM(nn.Module):
 
         lora_modules = self.finetune_modules.pop(scope)
 
-        for layer, (lora_q, lora_k, lora_v, lora_o) in zip(self.layers, lora_modules):
+        for (_, layer), (lora_q, lora_k, lora_v, lora_o) in zip(self.layers, lora_modules):
             block = layer.fn
 
             fused_attn_ff_weight = block.fused_attn_ff_proj.weight
@@ -455,6 +534,9 @@ class PaLM(nn.Module):
     def forward(
         self,
         x,
+        mask = None,
+        context = None,
+        context_mask = None,
         return_loss = False,
         disable_lora = False,
         finetune_scope = None,
@@ -462,17 +544,10 @@ class PaLM(nn.Module):
         return_only_embedding = False,
         return_logits_with_embedding = False
     ):
+        assert not (exists(context) and not self.cross_attend)
+
         if return_loss:
             x, labels = x[:, :-1], x[:, 1:]
-
-        # mask if encoder
-        # treat any token ids that are negative as tokens to mask out - only needed if not autoregressive
-
-        if not self.causal:
-            mask = x >= 0
-            x = x.masked_fill(~mask, 0)
-        else:
-            mask = None
 
         # get token embedding
 
@@ -488,10 +563,22 @@ class PaLM(nn.Module):
             assert finetune_scope in self.finetune_modules
             finetune_modules = self.finetune_modules[finetune_scope]
 
+        # cross attention key values, if needed, projected all at once across all decoder layers
+
+        cross_attn_key_values = tuple()
+        if exists(context):
+            context = self.to_cross_attn_key_values(context)
+            context = rearrange(context, 'b n (l r d) -> b n l r d', r = 2, l = len(self.layers))
+            cross_attn_key_values = tuple(tuple(tensor.unbind(dim = -2) for tensor in context.unbind(dim = -3)))
+
         # parallel attention / ff blocks, passing in finetuning loras
 
-        for layer, finetune_modules in zip_longest(self.layers, finetune_modules):
-            x = layer(x, mask = mask, finetune_modules = finetune_modules)
+        for (cross_attn, self_attn_and_ff), finetune_modules, cross_attn_kv in zip_longest(self.layers, finetune_modules, cross_attn_key_values):
+
+            if exists(cross_attn) and exists(cross_attn_kv):
+                x = cross_attn(x, kv = cross_attn_kv, context_mask = context_mask)
+
+            x = self_attn_and_ff(x, mask = mask, finetune_modules = finetune_modules)
 
         # final norm
 
