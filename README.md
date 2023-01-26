@@ -152,6 +152,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] incorporate some learning points from Sparrow, given Letitia's video
 - [ ] simple web interface with django + htmx for collecting human feedback
 - [ ] equip with <a href="https://github.com/hazyResearch/flash-attention">the best attention</a>
+- [ ] consider <a href="https://www.anthropic.com/constitutional.pdf">RLAIF</a>
 
 ## Citations
 
@@ -185,8 +186,8 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 
 ```bibtex
 @inproceedings{Sun2022ALT,
-  title     = {A Length-Extrapolatable Transformer},
-  author    = {Yutao Sun and Li Dong and Barun Patra and Shuming Ma and Shaohan Huang and Alon Benhaim and Vishrav Chaudhary and Xia Song and Furu Wei},
-  year      = {2022}
+    title     = {A Length-Extrapolatable Transformer},
+    author    = {Yutao Sun and Li Dong and Barun Patra and Shuming Ma and Shaohan Huang and Alon Benhaim and Vishrav Chaudhary and Xia Song and Furu Wei},
+    year      = {2022}
 }
 ```
