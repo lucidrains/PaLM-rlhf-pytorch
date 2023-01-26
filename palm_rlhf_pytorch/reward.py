@@ -74,11 +74,22 @@ class RewardModel(nn.Module):
         x,
         mask = None,
         prompt_mask = None,
+        prompt_lengths = None,
         labels = None,
         sample = False,
         sample_temperature = 1.,
         disable_lora = False
     ):
+
+        assert not (exists(prompt_mask) and exists(prompt_lengths))
+
+        # derive prompt mask from prompt lengths
+
+        if exists(prompt_lengths):
+            batch, seq_len = x.shape
+            arange = torch.arange(seq_len, device = x.device)
+            prompt_mask = repeat(arange, 'n -> b n', b = batch) < rearrange(prompt_lengths, 'b -> b 1')
+
         # reward model should have an understanding of which section is prompt, and which section is response
 
         extra_embed = None
