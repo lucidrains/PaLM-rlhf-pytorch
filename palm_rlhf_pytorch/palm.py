@@ -29,6 +29,9 @@ def default(val, d):
 def identity(t, *args, **kwargs):
     return t
 
+def l2norm(t):
+    return F.normalize(t, dim = -1)
+
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
 
@@ -116,6 +119,8 @@ class ParallelTransformerBlock(nn.Module):
         dim_head = 64,
         causal = True,
         heads = 8,
+        qk_rmsnorm = True,
+        qk_scale = 8,
         ff_mult = 4,
         attn_dropout = 0.,
         ff_dropout = 0.,
@@ -129,8 +134,14 @@ class ParallelTransformerBlock(nn.Module):
         ff_inner_dim = dim * ff_mult
         self.fused_dims = (attn_inner_dim, dim_head, dim_head, (ff_inner_dim * 2))
 
+        self.qk_rmsnorm = qk_rmsnorm
+
+        if qk_rmsnorm:
+            self.q_scale = nn.Parameter(torch.ones(dim_head))
+            self.k_scale = nn.Parameter(torch.ones(dim_head))
+
         self.heads = heads
-        self.scale = dim_head**-0.5
+        self.scale = (dim_head ** -0.5) if not qk_rmsnorm else qk_scale
         self.causal = causal
 
         self.rotary_emb = RotaryEmbedding(dim_head, scale_base = xpos_scale_base, use_xpos = use_xpos and causal)
@@ -212,7 +223,12 @@ class ParallelTransformerBlock(nn.Module):
 
         q = rearrange(q, "b n (h d) -> b h n d", h=h)
 
-        q = q * self.scale
+        # qk rmsnorm
+
+        if self.qk_rmsnorm:
+            q, k = map(l2norm, (q, k))
+            q = q * self.q_scale
+            k = k * self.k_scale
 
         # rotary embeddings with xpos decay for better length extrapolation
 
@@ -223,7 +239,7 @@ class ParallelTransformerBlock(nn.Module):
 
         # similarity
 
-        sim = einsum("b h i d, b j d -> b h i j", q, k)
+        sim = einsum("b h i d, b j d -> b h i j", q, k) * self.scale
 
         # key padding mask
 
@@ -275,6 +291,7 @@ class PaLM(nn.Module):
         ff_mult = 4,
         attn_dropout = 0.,
         ff_dropout = 0.,
+        qk_rmsnorm = True,
         lora_r = 8,
         rotary_xpos_scale_base = 512,
         finetune_scopes = tuple(),
@@ -296,6 +313,7 @@ class PaLM(nn.Module):
                 causal = causal,
                 dim_head = dim_head,
                 heads = heads,
+                qk_rmsnorm = qk_rmsnorm,
                 ff_mult = ff_mult,
                 attn_dropout = attn_dropout,
                 ff_dropout = ff_dropout,

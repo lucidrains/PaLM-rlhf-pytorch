@@ -191,3 +191,12 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     year      = {2022}
 }
 ```
+
+```bibtex
+@misc{gilmer2023intriguing
+    title  = {Intriguing Properties of Transformer Training Instabilities},
+    author = {Justin Gilmer, Andrea Schioppa, and Jeremy Cohen},
+    year   = {2023},
+    status = {to be published - one attention stabilization technique is circulating within Google Brain, being used by multiple teams}
+}
+```
