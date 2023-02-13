@@ -173,6 +173,7 @@ class ActorCritic(nn.Module):
         )
 
         if self.pooled_values:
+            critic_embeds = shift(critic_embeds, shift = 1, dim = -2)
             critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
 
         values = self.value_head(critic_embeds)
@@ -250,6 +251,10 @@ def log(t, eps = 1e-20):
 
 def log_prob(prob, indices):
     return log(prob.gather(-1, indices[..., None])).squeeze(-1)
+
+def shift(t, value = 0, shift = 1, dim = -1):
+    zeros = (0, 0) * (-dim - 1)
+    return F.pad(t, (*zeros, shift, -shift), value = value)
 
 def masked_entropy(prob, dim = -1, mask = None):
     entropies = (prob * log(prob)).sum(dim = -1)
@@ -478,6 +483,7 @@ class RLHFTrainer(nn.Module):
                     mask = action_masks
                 )
 
+                action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
                 action_len = old_log_probs.shape[-1]
 
                 action_probs = action_logits.softmax(dim = -1)
@@ -500,6 +506,8 @@ class RLHFTrainer(nn.Module):
                 normalize_kwargs = dict()
 
                 if old_values.ndim == 2:
+                    old_values, values = map(lambda t: shift(t, shift = 1, dim = -2), (old_values, values))
+
                     old_values = old_values[:, -action_len:]
                     values = values[:, -action_len:]
                     rewards = rearrange(rewards, 'b -> b 1')
@@ -599,6 +607,8 @@ class RLHFTrainer(nn.Module):
                     temperature = temperature,
                     return_values = True
                 )
+
+                action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
                 action_prob = action_logits.softmax(dim = -1)
                 action_log_prob = log_prob(action_prob, actions)
