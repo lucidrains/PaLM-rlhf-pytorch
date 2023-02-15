@@ -313,7 +313,8 @@ class RLHFTrainer(nn.Module):
         minibatch_size = 16,
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
-        accelerate_kwargs: dict = {}
+        accelerate_kwargs: dict = {},
+        use_lion = False
     ):
         super().__init__()
 
@@ -366,8 +367,8 @@ class RLHFTrainer(nn.Module):
 
         # optimizers
 
-        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas, eps = actor_adam_eps)
-        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas, eps = critic_adam_eps)
+        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas, eps = actor_adam_eps, use_lion = use_lion)
+        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas, eps = critic_adam_eps, use_lion = use_lion)
 
         # ppo hyperparams
 

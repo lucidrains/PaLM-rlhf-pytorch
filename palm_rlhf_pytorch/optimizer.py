@@ -1,4 +1,5 @@
 from torch.optim import AdamW, Adam
+from lion_pytorch import Lion
 
 def separate_weight_decayable_params(params):
     wd_params, no_wd_params = [], []
@@ -15,20 +16,24 @@ def get_optimizer(
     eps = 1e-8,
     filter_by_requires_grad = False,
     group_wd_params = True,
+    use_lion = True,
     **kwargs
 ):
     if filter_by_requires_grad:
         params = list(filter(lambda t: t.requires_grad, params))
 
-    if wd == 0:
-        return Adam(params, lr = lr, betas = betas, eps = eps)
-
-    if group_wd_params:
+    if group_wd_params and wd > 0:
         wd_params, no_wd_params = separate_weight_decayable_params(params)
 
         params = [
             {'params': wd_params},
             {'params': no_wd_params, 'weight_decay': 0},
         ]
+
+    if use_lion:
+        return Lion(params, lr = lr, betas = betas, weight_decay = wd)
+
+    if wd == 0:
+        return Adam(params, lr = lr, betas = betas, eps = eps)
 
     return AdamW(params, lr = lr, weight_decay = wd, betas = betas, eps = eps)

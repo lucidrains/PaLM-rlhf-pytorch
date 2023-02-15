@@ -4,7 +4,7 @@ import tqdm
 import numpy as np
 
 import torch
-from torch.optim import Adam
+from lion_pytorch import Lion
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
@@ -16,7 +16,7 @@ from accelerate import Accelerator
 NUM_BATCHES = int(1e5)
 BATCH_SIZE = 4
 GRADIENT_ACCUMULATE_EVERY = 4
-LEARNING_RATE = 2e-4
+LEARNING_RATE = 1e-4
 VALIDATE_EVERY = 100
 PRIME_LENGTH = 128
 GENERATE_EVERY = 500
@@ -78,7 +78,7 @@ val_loader = cycle(DataLoader(val_dataset, batch_size=BATCH_SIZE))
 
 # optimizer
 
-optim = Adam(model.palm_parameters(), lr=LEARNING_RATE)
+optim = Lion(model.palm_parameters(), lr = LEARNING_RATE)
 
 model, optim, train_loader, val_loader = accelerator.prepare(
     model, optim, train_loader, val_loader
