@@ -250,6 +250,7 @@ def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
 def log_prob(prob, indices):
+    assert prob.shape[:2] == indices.shape, f'preceding shapes of prob {prob.shape[:2]} and indices {indices.shape} must match'
     return log(prob.gather(-1, indices[..., None])).squeeze(-1)
 
 def shift(t, value = 0, shift = 1, dim = -1):
@@ -608,11 +609,13 @@ class RLHFTrainer(nn.Module):
                     temperature = temperature,
                     return_values = True
                 )
-
                 action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
                 action_prob = action_logits.softmax(dim = -1)
-                action_log_prob = log_prob(action_prob, actions)
+
+                action_len = actions.shape[-1]
+                action_log_prob = log_prob(action_prob, sequence)
+                action_log_prob = action_log_prob[:, -action_len:]
 
                 actions = rearrange(actions, '1 ... -> ...')
 
