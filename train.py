@@ -13,13 +13,16 @@ from accelerate import Accelerator
 
 # constants
 
-NUM_BATCHES = int(1e5)
+#NUM_BATCHES = int(1e5)
+NUM_BATCHES = int(1e1)
 BATCH_SIZE = 4
 GRADIENT_ACCUMULATE_EVERY = 4
 LEARNING_RATE = 1e-4
-VALIDATE_EVERY = 100
+#VALIDATE_EVERY = 100
+VALIDATE_EVERY = 10 
 PRIME_LENGTH = 128
-GENERATE_EVERY = 500
+#GENERATE_EVERY = 500
+GENERATE_EVERY = 10
 GENERATE_LENGTH = 512
 SEQ_LEN = 1024
 
@@ -99,18 +102,20 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
     optim.step()
     optim.zero_grad()
 
-    if i % VALIDATE_EVERY == 0:
+    if (i + 1) % VALIDATE_EVERY == 0:
         model.eval()
         with torch.no_grad():
             loss = model(next(val_loader), return_loss = True)
             accelerator.print(f"validation loss: {loss.item()}")
 
-    if i % GENERATE_EVERY == 0:
+    if (i + 1) % GENERATE_EVERY == 0:
         model.eval()
         inp = random.choice(val_dataset)[:PRIME_LENGTH]
         prime = decode_tokens(inp)
-        accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
+        accelerator.print(f"{'*' * 10}")
+        accelerator.print(f"Input: {prime} \n")
 
         sample = model.generate(GENERATE_LENGTH, inp[None, ...])
         output_str = decode_tokens(sample[0])
-        accelerator.print(output_str, "\n")
+        accelerator.print(f"Output: {output_str} \n ")
+        accelerator.print(f"{'*' * 10}")
