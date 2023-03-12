@@ -265,7 +265,7 @@ def masked_kl_div(prob1, prob2, mask = None):
     """
     need to account for variable sequence lengths, therefore not using the built-in functional version
     """
-    kl_divs = (prob1 * (log(prob2) - log(prob1))).sum(dim = -1)
+    kl_divs = (prob1 * (log(prob1) - log(prob2))).sum(dim = -1)
 
     if not exists(mask):
         return kl_divs.mean()
