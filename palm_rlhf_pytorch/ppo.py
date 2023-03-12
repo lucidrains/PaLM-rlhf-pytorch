@@ -291,6 +291,7 @@ class RLHFTrainer(nn.Module):
         tokenizer: Callable = None,
         palm: PaLM,
         reward_model: RewardModel,
+        critic_palm: Optional[PaLM] = None,
         actor_critic: Optional[ActorCritic] = None,
         actor_lr = 1e-4,
         critic_lr = 1e-4,
@@ -345,6 +346,7 @@ class RLHFTrainer(nn.Module):
         if not exists(actor_critic):
             actor_critic = ActorCritic(
                 palm = palm,
+                critic_palm = critic_palm,
                 actor_lora = actor_lora,
                 critic_lora = critic_lora,
                 actor_lora_r = actor_lora_r,
