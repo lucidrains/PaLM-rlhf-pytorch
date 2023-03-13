@@ -17,6 +17,7 @@ from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean, gumbel_sample, eval_decorator
 from palm_rlhf_pytorch.lora import LoRA
+from palm_rlhf_pytorch.flash_attn_triton import flash_attn_func
 
 # functions and decorators
 
@@ -125,7 +126,8 @@ class ParallelTransformerBlock(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         use_xpos = True,
-        xpos_scale_base = 512
+        xpos_scale_base = 512,
+        flash_attn = False,
     ):
         super().__init__()
         self.norm = LayerNorm(dim)
@@ -148,6 +150,7 @@ class ParallelTransformerBlock(nn.Module):
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
 
+        self.flash_attn = flash_attn
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
         self.attn_dropout = nn.Dropout(attn_dropout)
 
@@ -237,30 +240,45 @@ class ParallelTransformerBlock(nn.Module):
         q = apply_rotary_pos_emb(positions, q, scale)
         k = apply_rotary_pos_emb(positions, k, scale ** -1)
 
-        # similarity
+        # flash attention triton
 
-        sim = einsum("b h i d, b j d -> b h i j", q, k) * self.scale
+        if self.flash_attn:
 
-        # key padding mask
+            # Recommended for multi-query single-key-value attention by Tri Dao
+            # kv shape torch.Size([1, 512, 64]) -> torch.Size([1, 8, 512, 64])
 
-        if exists(mask):
-            mask = rearrange(mask, 'b j -> b 1 1 j')
-            sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
+            k = k.unsqueeze(1).expand_as(q)
+            v = v.unsqueeze(1).expand_as(q)
 
-        # causal mask
+            # flash attn: q, k, v, bias=None, causal, softmax_scale
 
-        if self.causal:
-            causal_mask = self.get_mask(n, device)
-            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+            out = flash_attn_func(q, k, v, None, self.causal, self.scale)
+        
+        else:
+            # similarity
 
-        # attention
+            sim = einsum("b h i d, b j d -> b h i j", q, k) * self.scale
 
-        attn = sim.softmax(dim=-1)
-        attn = self.attn_dropout(attn)
+            # key padding mask
 
-        # aggregate values
+            if exists(mask):
+                mask = rearrange(mask, 'b j -> b 1 1 j')
+                sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
-        out = einsum("b h i j, b j d -> b h i d", attn, v)
+            # causal mask
+
+            if self.causal:
+                causal_mask = self.get_mask(n, device)
+                sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+
+            # attention
+
+            attn = sim.softmax(dim=-1)
+            attn = self.attn_dropout(attn)
+
+            # aggregate values
+
+            out = einsum("b h i j, b j d -> b h i d", attn, v)
 
         # merge heads
 
@@ -294,6 +312,7 @@ class PaLM(nn.Module):
         qk_rmsnorm = False,
         lora_r = 8,
         rotary_xpos_scale_base = 512,
+        flash_attn = False,
         finetune_scopes = tuple(),
         cross_entropy_ignore_index = 0
     ):
@@ -317,7 +336,8 @@ class PaLM(nn.Module):
                 ff_mult = ff_mult,
                 attn_dropout = attn_dropout,
                 ff_dropout = ff_dropout,
-                xpos_scale_base = rotary_xpos_scale_base
+                xpos_scale_base = rotary_xpos_scale_base,
+                flash_attn = flash_attn
             ))
 
             self.layers.append(block)
