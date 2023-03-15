@@ -17,7 +17,6 @@ from einops.layers.torch import Rearrange, Reduce
 
 from palm_rlhf_pytorch.utils import top_p, top_k, masked_mean, gumbel_sample, eval_decorator
 from palm_rlhf_pytorch.lora import LoRA
-from palm_rlhf_pytorch.flash_attn_triton import flash_attn_func
 
 # functions and decorators
 
@@ -153,6 +152,7 @@ class ParallelTransformerBlock(nn.Module):
         self.flash_attn = flash_attn
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
         self.attn_dropout = nn.Dropout(attn_dropout)
+        self.flash_attn_dropout = attn_dropout
 
         # parallel feedforward tail
 
@@ -250,9 +250,15 @@ class ParallelTransformerBlock(nn.Module):
             k = k.unsqueeze(1).expand_as(q)
             v = v.unsqueeze(1).expand_as(q)
 
-            # flash attn: q, k, v, bias=None, causal, softmax_scale
-
-            out = flash_attn_func(q, k, v, None, self.causal, self.scale)
+            # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
+            with torch.backends.cuda.sdp_kernel(enable_flash=self.flash_attn):
+                out = F.scaled_dot_product_attention(
+                    q, k, v,
+                    attn_mask = mask,
+                    dropout_p = self.flash_attn_dropout, 
+                    is_causal = self.causal, 
+                    scale = self.scale
+                )
         
         else:
             # similarity
