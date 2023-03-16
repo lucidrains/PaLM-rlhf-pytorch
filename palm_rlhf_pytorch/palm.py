@@ -259,14 +259,22 @@ class ParallelTransformerBlock(nn.Module):
             v = v.unsqueeze(1).expand_as(q)
 
             # Check if mask exists and expand to compatible shape
+            # The mask is B L, so it would have to be expanded to B N L
 
             if exists(mask):
-                mask = mask.unsqueeze(1).expand_as(q)
+                mask = rearrange(mask, 'b j -> b h i j')
 
             # Check if there is a compatible device for flash attention
 
             try:
-                flash_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                if torch.cuda.is_available():
+                    if x.device.type == 'cuda':
+                        flash_device = torch.device('cuda')
+                    else:
+                        flash_device = torch.device('cpu')
+                else:
+                    flash_device = torch.device('cpu')
+
                 if flash_device.type == 'cuda':
                     device_properties = torch.cuda.get_device_properties(device)
                     if device_properties.major == 8 and device_properties.minor == 0:
@@ -279,7 +287,7 @@ class ParallelTransformerBlock(nn.Module):
                         enable_flash = False
                         enable_math = True
                         enable_mem_efficient = True
-                else:
+                elif flash_device.type == 'cpu':
                     # Default context manager settings with CPU
                     print('CPU detected, using default context manager settings')
                     enable_flash = True
