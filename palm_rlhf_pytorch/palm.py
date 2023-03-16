@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 from collections import namedtuple
 from itertools import zip_longest
+from packaging import version
 
 from tqdm import tqdm
 from beartype import beartype
@@ -244,18 +245,55 @@ class ParallelTransformerBlock(nn.Module):
 
         if self.flash_attn:
 
+            # Check to see if the correct version of PyTorch is supported
+
+            try:
+                assert version.parse(torch.__version__) >= version.parse('2.0.0')
+            except:
+                raise Exception("flash attention requires pytorch 2.0")
+
             # Recommended for multi-query single-key-value attention by Tri Dao
             # kv shape torch.Size([1, 512, 64]) -> torch.Size([1, 8, 512, 64])
 
             k = k.unsqueeze(1).expand_as(q)
             v = v.unsqueeze(1).expand_as(q)
 
+            # Check if mask exists and expand to compatible shape
+
+            if exists(mask):
+                mask = mask.unsqueeze(1).expand_as(q)
+
+            # Check if there is a compatible device for flash attention
+
+            try:
+                flash_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                if flash_device.type == 'cuda':
+                    device_properties = torch.cuda.get_device_properties(device)
+                    if device_properties.major == 8 and device_properties.minor == 0:
+                        print('A100 GPU detected, using flash attention')
+                        enable_flash = True
+                        enable_math = False
+                        enable_mem_efficient = False
+                    else:
+                        print('Non-A100 GPU detected, using math or mem efficient attention')
+                        enable_flash = False
+                        enable_math = True
+                        enable_mem_efficient = True
+                else:
+                    # Default context manager settings with CPU
+                    print('CPU detected, using default context manager settings')
+                    enable_flash = True
+                    enable_math = True
+                    enable_mem_efficient = True
+            except RuntimeError as error:
+                print(f'An error occurred: {error}.')
+
             # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
             
             with torch.backends.cuda.sdp_kernel(
-                enable_flash=self.flash_attn, 
-                enable_math=False, 
-                enable_mem_efficient=False
+                enable_flash=enable_flash, 
+                enable_math=enable_math, 
+                enable_mem_efficient=enable_mem_efficient
             ):
                 out = F.scaled_dot_product_attention(
                     q, k, v,
