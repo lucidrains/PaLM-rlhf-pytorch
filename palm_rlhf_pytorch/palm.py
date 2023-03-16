@@ -251,7 +251,12 @@ class ParallelTransformerBlock(nn.Module):
             v = v.unsqueeze(1).expand_as(q)
 
             # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
-            with torch.backends.cuda.sdp_kernel(enable_flash=self.flash_attn):
+            
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=True, 
+                enable_math=False, 
+                enable_mem_efficient=False
+            ):
                 out = F.scaled_dot_product_attention(
                     q, k, v,
                     attn_mask = mask,
