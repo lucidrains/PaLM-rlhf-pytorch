@@ -262,7 +262,7 @@ class ParallelTransformerBlock(nn.Module):
             # The mask is B L, so it would have to be expanded to B N L
 
             if exists(mask):
-                mask = rearrange(mask, 'b j -> b h i j')
+                mask = mask.unsqueeze(1).unsqueeze(-1).expand(-1, h, q.shape[-2], -1)
 
             # Check if there is a compatible device for flash attention
 
