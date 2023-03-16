@@ -253,7 +253,7 @@ class ParallelTransformerBlock(nn.Module):
             # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
             
             with torch.backends.cuda.sdp_kernel(
-                enable_flash=True, 
+                enable_flash=self.flash_attn, 
                 enable_math=False, 
                 enable_mem_efficient=False
             ):
