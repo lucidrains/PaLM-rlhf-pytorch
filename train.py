@@ -47,7 +47,8 @@ device = accelerator.device
 model = PaLM(
     num_tokens=256,
     dim=512,
-    depth=8
+    depth=8,
+    flash_attn=True
 ).to(device)
 
 # prepare enwik8 data

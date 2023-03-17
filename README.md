@@ -51,7 +51,8 @@ from palm_rlhf_pytorch import PaLM
 palm = PaLM(
     num_tokens = 20000,
     dim = 512,
-    depth = 12
+    depth = 12,
+    flash_attn = True
 ).cuda()
 
 seq = torch.randint(0, 20000, (1, 2048)).cuda()
@@ -209,9 +210,9 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 
 ```bibtex
 @inproceedings{dao2022flashattention,
-  title={Flash{A}ttention: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
-  author={Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2022}
+    title   = {Flash{A}ttention: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
+    author  = {Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+    booktitle = {Advances in Neural Information Processing Systems},
+    year    = {2022}
 }
 ```
