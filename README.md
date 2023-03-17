@@ -32,6 +32,8 @@ There is no trained model. This is just the ship and overall map. We still need 
 
 - <a href="https://github.com/kisseternity">@kisseternity</a> and <a href="https://github.com/taynoel84">@taynoel84</a> for the code review and finding bugs
 
+- <a href="https://github.com/conceptofmind">Enrico</a> for integrating <a href="https://arxiv.org/abs/2205.14135">Flash Attention</a> from Pytorch 2.0
+
 ## Install
 
 ```bash
