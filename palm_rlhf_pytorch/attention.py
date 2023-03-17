@@ -107,6 +107,14 @@ class Attention(nn.Module):
         return out
 
     def forward(self, q, k, v, mask = None):
+        """
+        einstein notation
+        b - batch
+        h - heads
+        n, i, j - sequence length (base sequence length, source, target)
+        d - feature dimension
+        """
+
         n, device = q.shape[-2], q.device
 
         scale = q.shape[-1] ** -0.5
