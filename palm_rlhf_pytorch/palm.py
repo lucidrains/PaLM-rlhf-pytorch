@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 from collections import namedtuple
 from itertools import zip_longest
+from packaging import version
 
 from tqdm import tqdm
 from beartype import beartype
@@ -125,7 +126,8 @@ class ParallelTransformerBlock(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         use_xpos = True,
-        xpos_scale_base = 512
+        xpos_scale_base = 512,
+        flash_attn = False,
     ):
         super().__init__()
         self.norm = LayerNorm(dim)
@@ -148,8 +150,10 @@ class ParallelTransformerBlock(nn.Module):
 
         self.fused_attn_ff_proj = nn.Linear(dim, sum(self.fused_dims), bias=False)
 
+        self.flash_attn = flash_attn
         self.attn_out = nn.Linear(attn_inner_dim, dim, bias=False)
         self.attn_dropout = nn.Dropout(attn_dropout)
+        self.flash_attn_dropout = attn_dropout
 
         # parallel feedforward tail
 
@@ -237,30 +241,101 @@ class ParallelTransformerBlock(nn.Module):
         q = apply_rotary_pos_emb(positions, q, scale)
         k = apply_rotary_pos_emb(positions, k, scale ** -1)
 
-        # similarity
+        # flash attention triton
 
-        sim = einsum("b h i d, b j d -> b h i j", q, k) * self.scale
+        if self.flash_attn:
 
-        # key padding mask
+            # Check to see if the correct version of PyTorch is supported
 
-        if exists(mask):
-            mask = rearrange(mask, 'b j -> b 1 1 j')
-            sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
+            try:
+                assert version.parse(torch.__version__) >= version.parse('2.0.0')
+            except:
+                raise Exception("flash attention requires pytorch 2.0")
 
-        # causal mask
+            # Recommended for multi-query single-key-value attention by Tri Dao
+            # kv shape torch.Size([1, 512, 64]) -> torch.Size([1, 8, 512, 64])
 
-        if self.causal:
-            causal_mask = self.get_mask(n, device)
-            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+            k = k.unsqueeze(1).expand_as(q)
+            v = v.unsqueeze(1).expand_as(q)
 
-        # attention
+            # Check if mask exists and expand to compatible shape
+            # The mask is B L, so it would have to be expanded to B N L
 
-        attn = sim.softmax(dim=-1)
-        attn = self.attn_dropout(attn)
+            if exists(mask):
+                mask = mask.unsqueeze(1).unsqueeze(-1).expand(-1, h, q.shape[-2], -1)
 
-        # aggregate values
+            # Check if there is a compatible device for flash attention
 
-        out = einsum("b h i j, b j d -> b h i d", attn, v)
+            try:
+                if torch.cuda.is_available():
+                    if x.device.type == 'cuda':
+                        flash_device = torch.device('cuda')
+                    else:
+                        flash_device = torch.device('cpu')
+                else:
+                    flash_device = torch.device('cpu')
+
+                if flash_device.type == 'cuda':
+                    device_properties = torch.cuda.get_device_properties(device)
+                    if device_properties.major == 8 and device_properties.minor == 0:
+                        print('A100 GPU detected, using flash attention')
+                        enable_flash = True
+                        enable_math = False
+                        enable_mem_efficient = False
+                    else:
+                        print('Non-A100 GPU detected, using math or mem efficient attention')
+                        enable_flash = False
+                        enable_math = True
+                        enable_mem_efficient = True
+                elif flash_device.type == 'cpu':
+                    # Default context manager settings with CPU
+                    print('CPU detected, using default context manager settings')
+                    enable_flash = True
+                    enable_math = True
+                    enable_mem_efficient = True
+            except RuntimeError as error:
+                print(f'An error occurred: {error}.')
+
+            # pytorch 2.0 flash attn: q, k, v, mask, dropout, causal, softmax_scale
+            
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=enable_flash, 
+                enable_math=enable_math, 
+                enable_mem_efficient=enable_mem_efficient
+            ):
+                out = F.scaled_dot_product_attention(
+                    q, k, v,
+                    attn_mask = mask,
+                    dropout_p = self.flash_attn_dropout, 
+                    is_causal = self.causal, 
+                    scale = self.scale
+                )
+        
+        else:
+            # similarity
+
+            sim = einsum("b h i d, b j d -> b h i j", q, k) * self.scale
+
+            # key padding mask
+
+            if exists(mask):
+                mask = rearrange(mask, 'b j -> b 1 1 j')
+                sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
+
+            # causal mask
+
+            if self.causal:
+                causal_mask = self.get_mask(n, device)
+                sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
+
+            # attention
+
+            attn = sim.softmax(dim=-1)
+            attn = self.attn_dropout(attn)
+
+            # aggregate values
+
+            out = einsum("b h i j, b j d -> b h i d", attn, v)
 
         # merge heads
 
@@ -294,6 +369,7 @@ class PaLM(nn.Module):
         qk_rmsnorm = False,
         lora_r = 8,
         rotary_xpos_scale_base = 512,
+        flash_attn = False,
         finetune_scopes = tuple(),
         cross_entropy_ignore_index = 0
     ):
@@ -317,7 +393,8 @@ class PaLM(nn.Module):
                 ff_mult = ff_mult,
                 attn_dropout = attn_dropout,
                 ff_dropout = ff_dropout,
-                xpos_scale_base = rotary_xpos_scale_base
+                xpos_scale_base = rotary_xpos_scale_base,
+                flash_attn = flash_attn
             ))
 
             self.layers.append(block)

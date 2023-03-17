@@ -204,3 +204,12 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     status = {to be published - one attention stabilization technique is circulating within Google Brain, being used by multiple teams}
 }
 ```
+
+```bibtex
+@inproceedings{dao2022flashattention,
+  title={Flash{A}ttention: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
+  author={Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2022}
+}
+```
