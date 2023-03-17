@@ -149,6 +149,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [x] clone base transformer with separate lora for critic
 - [x] also allow for non-LoRA based finetuning
 - [x] redo normalize to be able to have a masked version, not sure if anyone will ever use per token rewards / values, but good practice to implement
+- [x] equip with <a href="https://github.com/hazyResearch/flash-attention">the best attention</a>
 
 - [ ] add Hugging Face accelerate and test out wandb instrumentation
 - [ ] search literature to figure out what is the latest SOTA for PPO, assuming RL field is still making progress.
@@ -158,7 +159,6 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 - [ ] allow for finetuning penultimate N layers only in either actor or critic, assuming if pretrained
 - [ ] incorporate some learning points from Sparrow, given Letitia's video
 - [ ] simple web interface with django + htmx for collecting human feedback
-- [ ] equip with <a href="https://github.com/hazyResearch/flash-attention">the best attention</a>
 - [ ] consider <a href="https://www.anthropic.com/constitutional.pdf">RLAIF</a>
 
 ## Citations
