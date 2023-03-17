@@ -52,7 +52,7 @@ palm = PaLM(
     num_tokens = 20000,
     dim = 512,
     depth = 12,
-    flash_attn = True
+    flash_attn = True # https://arxiv.org/abs/2205.14135
 ).cuda()
 
 seq = torch.randint(0, 20000, (1, 2048)).cuda()
