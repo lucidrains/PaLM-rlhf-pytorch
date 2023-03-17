@@ -44,8 +44,8 @@ class Attention(nn.Module):
         self.causal = causal
         self.attn_dropout = nn.Dropout(dropout)
 
-        assert version.parse(torch.__version__) >= version.parse('2.0.0'), 'in order to use flash attention, you must be using pytorch 2.0 or above'
         self.use_flash_attn = use_flash_attn
+        assert not (use_flash_attn and version.parse(torch.__version__) < version.parse('2.0.0')), 'in order to use flash attention, you must be using pytorch 2.0 or above'
 
         self.register_buffer("mask", None, persistent=False)
 
