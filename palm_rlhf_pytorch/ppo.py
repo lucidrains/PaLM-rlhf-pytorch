@@ -505,7 +505,7 @@ class RLHFTrainer(nn.Module):
                 kl_div_loss = 0.
 
                 if self.kl_div_loss_weight > 0:
-                    kl_div_loss = masked_kl_div(action_probs, old_action_probs, mask = action_masks) * self.kl_div_loss_weight
+                    kl_div_loss = masked_kl_div(old_action_probs, action_probs, mask = action_masks) * self.kl_div_loss_weight
 
                 # handle non-pooled values
 
