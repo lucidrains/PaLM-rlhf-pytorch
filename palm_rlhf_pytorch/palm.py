@@ -503,7 +503,7 @@ class PaLM(nn.Module):
 
         # to logits
 
-        logits = self.to_logits(x)
+        logits = self.to_logits(embeds)
 
         ret = (logits, embeds) if return_logits_with_embedding else logits
 
