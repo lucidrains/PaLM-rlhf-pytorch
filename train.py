@@ -112,6 +112,11 @@ for i in tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
         prime = decode_tokens(inp)
         accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
 
-        sample = model.module.generate(GENERATE_LENGTH, inp[None, ...])
+        # Check if model is wrapped
+        if hasattr(model, "module"):
+            sample = model.module.generate(GENERATE_LENGTH, inp[None, ...])
+        else:
+            sample = model.generate(GENERATE_LENGTH, inp[None, ...])
+
         output_str = decode_tokens(sample[0])
         accelerator.print(output_str, "\n")
