@@ -1,7 +1,7 @@
 import math
 from pathlib import Path
 import copy
-from tqdm import tqdm
+from accelerate.utils.tqdm import tqdm
 from functools import partial
 from collections import deque, namedtuple
 from random import randrange
@@ -611,7 +611,7 @@ class RLHFTrainer(nn.Module):
                     prompt_mask,
                     action_logits,
                     value
-                ) = self.actor_critic.generate(
+                ) = self.actor_critic.module.generate(
                     rearrange(state, 'n -> 1 n'),
                     max_seq_len = max_seq_len,
                     eos_token = eos_token,

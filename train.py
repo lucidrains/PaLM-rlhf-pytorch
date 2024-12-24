@@ -1,6 +1,6 @@
 import gzip
 import random
-import tqdm
+from accelerate.utils.tqdm import tqdm
 import numpy as np
 
 import torch
@@ -39,7 +39,7 @@ def decode_tokens(tokens):
 
 # accelerator
 
-accelerator = Accelerator()
+accelerator = Accelerator(gradient_accumulation_steps=GRADIENT_ACCUMULATE_EVERY)
 device = accelerator.device
 
 # instantiate palm
@@ -87,18 +87,18 @@ model, optim, train_loader, val_loader = accelerator.prepare(
 
 # training
 
-for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
+for i in tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
     model.train()
 
-    for _ in range(GRADIENT_ACCUMULATE_EVERY):
+    with accelerator.accumulate(model):
         loss = model(next(train_loader), return_loss = True)
         accelerator.backward(loss / GRADIENT_ACCUMULATE_EVERY)
 
-    accelerator.print(f"training loss: {loss.item()}")
-    accelerator.clip_grad_norm_(model.parameters(), 0.5)
-
-    optim.step()
-    optim.zero_grad()
+        accelerator.print(f"training loss: {loss.item()}")
+        accelerator.clip_grad_norm_(model.parameters(), 0.5)
+    
+        optim.step()
+        optim.zero_grad()
 
     if i % VALIDATE_EVERY == 0:
         model.eval()
@@ -112,6 +112,6 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
         prime = decode_tokens(inp)
         accelerator.print(f"%s \n\n %s", (prime, "*" * 100))
 
-        sample = model.generate(GENERATE_LENGTH, inp[None, ...])
+        sample = model.module.generate(GENERATE_LENGTH, inp[None, ...])
         output_str = decode_tokens(sample[0])
         accelerator.print(output_str, "\n")
