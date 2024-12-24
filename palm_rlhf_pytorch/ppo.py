@@ -602,6 +602,12 @@ class RLHFTrainer(nn.Module):
                 state_mask = state != self.pad_value
                 state = state[state_mask]
 
+                # Check if model is wrapped
+                if hasattr(self.actor_critic, "module"):
+                    generate = self.actor_critic.module.generate
+                else:
+                    generate = self.actor_critic.generate
+
                 # get predicted sequence
 
                 (
@@ -611,7 +617,7 @@ class RLHFTrainer(nn.Module):
                     prompt_mask,
                     action_logits,
                     value
-                ) = self.actor_critic.module.generate(
+                ) = generate(
                     rearrange(state, 'n -> 1 n'),
                     max_seq_len = max_seq_len,
                     eos_token = eos_token,
