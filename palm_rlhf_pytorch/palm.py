@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import copy
 from pathlib import Path
@@ -7,11 +9,11 @@ from itertools import zip_longest
 
 from tqdm import tqdm
 from beartype import beartype
-from beartype.typing import Tuple, Optional
 
 import torch
 from torch import einsum, nn
 import torch.nn.functional as F
+from torch.nn import Module, ModuleList, ModuleDict
 
 from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
@@ -37,7 +39,7 @@ def l2norm(t):
 # normalization
 # they use layernorm without bias, something that pytorch does not offer
 
-class LayerNorm(nn.Module):
+class LayerNorm(Module):
     def __init__(self, dim):
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(dim))
@@ -49,7 +51,7 @@ class LayerNorm(nn.Module):
 # residual
 
 
-class Residual(nn.Module):
+class Residual(Module):
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
@@ -66,7 +68,7 @@ class Residual(nn.Module):
 # https://arxiv.org/abs/2104.09864
 # https://arxiv.org/abs/2212.10554v1
 
-class RotaryEmbedding(nn.Module):
+class RotaryEmbedding(Module):
     def __init__(self, dim, scale_base = 512, use_xpos = True):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
@@ -104,7 +106,7 @@ def apply_rotary_pos_emb(pos, t, scale = 1.):
 # https://arxiv.org/abs/2002.05202
 
 
-class SwiGLU(nn.Module):
+class SwiGLU(Module):
     def forward(self, x):
         x, gate = x.chunk(2, dim=-1)
         return F.silu(gate) * x
@@ -114,7 +116,7 @@ class SwiGLU(nn.Module):
 # discovered by Wang et al + EleutherAI from GPT-J fame
 
 
-class ParallelTransformerBlock(nn.Module):
+class ParallelTransformerBlock(Module):
     def __init__(
         self,
         dim,
@@ -259,7 +261,7 @@ class ParallelTransformerBlock(nn.Module):
 # transformer
 
 @beartype
-class PaLM(nn.Module):
+class PaLM(Module):
     def __init__(
         self,
         *,
@@ -287,7 +289,7 @@ class PaLM(nn.Module):
         self.num_tokens = num_tokens
 
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.layers = nn.ModuleList([])
+        self.layers = ModuleList([])
 
         for _ in range(depth):
             block = Residual(ParallelTransformerBlock(
@@ -315,7 +317,7 @@ class PaLM(nn.Module):
         # fine tuning related
 
         self.lora_r = lora_r
-        self.finetune_modules = nn.ModuleDict({})
+        self.finetune_modules = ModuleDict({})
 
         for scope in finetune_scopes:
             self.add_finetune_params(scope)
@@ -346,10 +348,10 @@ class PaLM(nn.Module):
         q_inner_dim = heads * dim_head
         kv_inner_dim = dim_head
 
-        lora_modules = nn.ModuleList([])
+        lora_modules = ModuleList([])
 
         for _ in range(len(self.layers)):
-            lora_modules.append(nn.ModuleList([
+            lora_modules.append(ModuleList([
                 LoRA(dim, q_inner_dim, r = r),   # queries
                 LoRA(dim, kv_inner_dim, r = r),  # keys
                 LoRA(dim, kv_inner_dim, r = r),  # values

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from pathlib import Path
 import copy
@@ -7,10 +9,11 @@ from collections import deque, namedtuple
 from random import randrange
 
 from beartype import beartype
-from beartype.typing import List, Optional, Callable, Deque
+from beartype.typing import Callable, Deque
 
 import torch
-from torch import nn
+from torch import nn, Tensor
+from torch.nn import Module
 import torch.nn.functional as F
 
 from torch.optim import Adam
@@ -39,11 +42,11 @@ PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
 ])
 
 @beartype
-class ActorCritic(nn.Module):
+class ActorCritic(Module):
     def __init__(
         self,
         palm: PaLM,
-        critic_palm: Optional[PaLM] = None,
+        critic_palm: PaLM | None = None,
         pooled_values = False,
         actor_lora = True,
         critic_lora = True,
@@ -196,7 +199,7 @@ Memory = namedtuple('Memory', [
 class ExperienceDataset(Dataset):
     def __init__(
         self,
-        data: List[torch.Tensor],
+        data: Tensor,
         device = None
     ):
         super().__init__()
@@ -284,18 +287,18 @@ def clipped_value_loss(values, rewards, old_values, clip):
 # rlhf trainer
 
 @beartype
-class RLHFTrainer(nn.Module):
+class RLHFTrainer(Module):
     def __init__(
         self,
         *,
-        prompts: Optional[List[str]] = None,
-        prompts_path: Optional[str] = None,
-        prompt_token_ids: Optional[torch.Tensor] = None,
-        tokenizer: Callable = None,
+        prompts: list[str] | None = None,
+        prompts_path: str | None = None,
+        prompt_token_ids: Tensor | None = None,
+        tokenizer: Callable | None = None,
         palm: PaLM,
         reward_model: RewardModel,
-        critic_palm: Optional[PaLM] = None,
-        actor_critic: Optional[ActorCritic] = None,
+        critic_palm: PaLM | None = None,
+        actor_critic: ActorCritic | None = None,
         actor_lr = 1e-4,
         critic_lr = 1e-4,
         actor_wd = 0.,

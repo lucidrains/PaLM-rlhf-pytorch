@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn import Module
 
 # helper functions
 
@@ -11,7 +12,7 @@ def default(val, d):
 
 # LoRA - https://arxiv.org/abs/2106.09685
 
-class LoRA(nn.Module):
+class LoRA(Module):
     def __init__(
         self,
         dim,

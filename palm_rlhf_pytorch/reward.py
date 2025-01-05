@@ -3,10 +3,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 from beartype import beartype
-from beartype.typing import Tuple, Optional
 
 import torch
 from torch import nn
+from torch.nn import Module
 import torch.nn.functional as F
 
 from einops import rearrange, repeat, reduce, pack, unpack
@@ -23,7 +23,7 @@ def exists(val):
 # Reward Model - PaLM with a scalar head
 
 @beartype
-class RewardModel(nn.Module):
+class RewardModel(Module):
     def __init__(
         self,
         palm: PaLM,
