@@ -223,3 +223,12 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url     = {https://medium.com/@ohadrubin/exploring-weight-decay-in-layer-normalization-challenges-and-a-reparameterization-solution-ad4d12c24950}
 }
 ```
+
+```bibtex
+@inproceedings{Yuan2024FreePR,
+    title   = {Free Process Rewards without Process Labels},
+    author  = {Lifan Yuan and Wendi Li and Huayu Chen and Ganqu Cui and Ning Ding and Kaiyan Zhang and Bowen Zhou and Zhiyuan Liu and Hao Peng},
+    year    = {2024},
+    url     = {https://api.semanticscholar.org/CorpusID:274445748}
+}
+```
