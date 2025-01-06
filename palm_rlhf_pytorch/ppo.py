@@ -16,16 +16,17 @@ from torch import nn, Tensor
 from torch.nn import Module
 import torch.nn.functional as F
 
-from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 
+from lion_pytorch import Lion
+from adam_atan2_pytorch import AdoptAtan2
+
 from palm_rlhf_pytorch.palm import PaLM
 from palm_rlhf_pytorch.reward import RewardModel
-from palm_rlhf_pytorch.optimizer import get_optimizer
 from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
 
 from accelerate import Accelerator
@@ -41,8 +42,8 @@ PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
     'values'
 ])
 
-@beartype
 class ActorCritic(Module):
+    @beartype
     def __init__(
         self,
         palm: PaLM,
@@ -195,11 +196,11 @@ Memory = namedtuple('Memory', [
     'value'
 ])
 
-@beartype
 class ExperienceDataset(Dataset):
+    @beartype
     def __init__(
         self,
-        data: Tensor,
+        data,
         device = None
     ):
         super().__init__()
@@ -303,8 +304,6 @@ class RLHFTrainer(Module):
         critic_lr = 1e-4,
         actor_wd = 0.,
         critic_wd = 0.,
-        actor_adam_eps = 1e-7,
-        critic_adam_eps = 1e-7,
         actor_lora = True,
         critic_lora = True,
         actor_lora_r = 8,
@@ -376,8 +375,10 @@ class RLHFTrainer(Module):
 
         # optimizers
 
-        self.actor_optim = get_optimizer(actor_critic.actor_parameters(), lr = actor_lr, wd = actor_wd, betas = betas, eps = actor_adam_eps, use_lion = use_lion)
-        self.critic_optim = get_optimizer(actor_critic.critic_parameters(), lr = critic_lr, wd = critic_wd, betas = betas, eps = critic_adam_eps, use_lion = use_lion)
+        optimizer_klass = Lion if use_lion else AdoptAtan2
+
+        self.actor_optim = optimizer_klass(actor_critic.actor_parameters(), lr = actor_lr, weight_decay = actor_wd, betas = betas)
+        self.critic_optim = optimizer_klass(actor_critic.critic_parameters(), lr = critic_lr, weight_decay = critic_wd, betas = betas)
 
         # ppo hyperparams
 
