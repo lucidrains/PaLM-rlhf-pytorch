@@ -42,11 +42,11 @@ def l2norm(t):
 class LayerNorm(Module):
     def __init__(self, dim):
         super().__init__()
-        self.gamma = nn.Parameter(torch.ones(dim))
+        self.gamma = nn.Parameter(torch.zeros(dim))
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x):
-        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+        return F.layer_norm(x, x.shape[-1:], (self.gamma + 1), self.beta)
 
 # residual
 
@@ -260,8 +260,8 @@ class ParallelTransformerBlock(Module):
 
 # transformer
 
-@beartype
 class PaLM(Module):
+    @beartype
     def __init__(
         self,
         *,

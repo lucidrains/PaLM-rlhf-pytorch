@@ -22,8 +22,8 @@ def exists(val):
 
 # Reward Model - PaLM with a scalar head
 
-@beartype
 class RewardModel(Module):
+    @beartype
     def __init__(
         self,
         palm: PaLM,

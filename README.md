@@ -216,3 +216,10 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     year    = {2022}
 }
 ```
+
+```bibtex
+@misc{Rubin2024,
+    author  = {Ohad Rubin},
+    url     = {https://medium.com/@ohadrubin/exploring-weight-decay-in-layer-normalization-challenges-and-a-reparameterization-solution-ad4d12c24950}
+}
+```
