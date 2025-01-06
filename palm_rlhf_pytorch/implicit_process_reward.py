@@ -1,3 +1,6 @@
+# Free Process Rewards without Process Labels 
+# Yuan et al.  https://arxiv.org/abs/2412.01981 - paper that led to Prime
+
 from __future__ import annotations
 from copy import deepcopy
 
@@ -17,9 +20,6 @@ def get_logprob_at(logits, seq):
     seq = rearrange(seq, '... -> ... 1')
     log_prob = log_probs.gather(-1, seq)
     return rearrange(log_prob, '... 1 -> ...')
-
-# Free Process Rewards without Process Labels 
-# Yuan et al.  https://arxiv.org/abs/2412.01981 - paper that led to Prime
 
 class ImplicitPRM(Module):
     """ PRM stands for process reward model, an openai paper that shows that rewarding the steps a model takes to its outcome is better than only rewarding based on final answer or outcome. basically same as when a teacher gives you some credit for showing your steps on an exam """
@@ -51,12 +51,6 @@ class ImplicitPRM(Module):
         seq,
         labels = None
     ):
-        """
-        b - batch
-        n - sequence
-        l - logit dimension (num tokens)
-        """
-
         source_seq, target_seq = seq[:, :-1], seq[:, 1:]
 
         mask = target_seq >= 0 # assume any token ids < 0 to be padding
