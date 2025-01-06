@@ -7,13 +7,18 @@ import torch
 from torch.nn import Module
 from torch.nn.functional import logsigmoid
 
-from einx import get_at
 from einops import rearrange
 
 # helpers
 
 def exists(v):
     return v is not None
+
+def get_logprob_at(logits, seq):
+    log_probs = logits.log_softmax(dim = -1)
+    seq = rearrange(seq, '... -> ... 1')
+    log_prob = log_probs.gather(-1, seq)
+    return rearrange(log_prob, '... 1 -> ...')
 
 # Free Process Rewards without Process Labels 
 # Yuan et al.  https://arxiv.org/abs/2412.01981 - paper that led to Prime
@@ -65,8 +70,8 @@ class ImplicitPRM(Module):
         log_probs = model_logits.log_softmax(dim = -1)
         ref_log_probs = ref_model_logits.log_softmax(dim = -1)
 
-        log_prob = get_at('b n [l], b n -> b n', log_probs, target_seq)
-        ref_log_prob = get_at('b n [l], b n -> b n', ref_log_probs, target_seq)
+        log_prob = get_logprob_at(log_probs, target_seq)
+        ref_log_prob = get_logprob_at(ref_log_probs, target_seq)
 
         # main formula is DPO-like, and has some connection with Q-learning https://arxiv.org/abs/2404.12358 . it is all connected
 
