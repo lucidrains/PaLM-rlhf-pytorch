@@ -56,17 +56,16 @@ class ImplicitPRM(Module):
         n - sequence
         l - logit dimension (num tokens)
         """
+        source_seq, target_seq = seq[:, :-1], seq[:, 1:]
 
-        return_loss = exists(labels)
-
-        model_logits = self.model(seq)
-        ref_model_logits = self.ref_model(seq)
+        model_logits = self.model(source_seq)
+        ref_model_logits = self.ref_model(source_seq)
 
         log_probs = model_logits.log_softmax(dim = -1)
         ref_log_probs = ref_model_logits.log_softmax(dim = -1)
 
-        log_prob = get_at('b n [l], b n -> b n', log_probs, seq)
-        ref_log_prob = get_at('b n [l], b n -> b n', ref_log_probs, seq)
+        log_prob = get_at('b n [l], b n -> b n', log_probs, target_seq)
+        ref_log_prob = get_at('b n [l], b n -> b n', ref_log_probs, target_seq)
 
         # main formula is DPO-like, and has some connection with Q-learning https://arxiv.org/abs/2404.12358 . it is all connected
 
@@ -74,7 +73,7 @@ class ImplicitPRM(Module):
 
         # early return if not training, as in Prime with alternating model and prm training
 
-        if not return_loss:
+        if not exists(labels):
             return implicit_rewards
 
         labels = rearrange(labels, 'b -> b 1')
