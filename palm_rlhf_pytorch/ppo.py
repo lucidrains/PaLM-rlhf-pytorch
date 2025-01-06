@@ -27,8 +27,8 @@ from adam_atan2_pytorch import AdoptAtan2
 
 from palm_rlhf_pytorch.palm import PaLM
 from palm_rlhf_pytorch.reward import RewardModel
+from palm_rlhf_pytorch.implicit_process_reward import ImplicitPRM
 from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
-
 from accelerate import Accelerator
 
 # actor critic - PaLM with lora
@@ -47,7 +47,7 @@ class ActorCritic(Module):
     def __init__(
         self,
         palm: PaLM,
-        critic_palm: PaLM | None = None,
+        critic_palm: PaLM | ImplicitPRM | None = None,
         pooled_values = False,
         actor_lora = True,
         critic_lora = True,
@@ -61,13 +61,26 @@ class ActorCritic(Module):
         super().__init__()
         self.actor_palm = palm
 
-        self.critic_palm = critic_palm
+        # detect implicit prm and auto-set some hyperparameters
 
-        if not exists(self.critic_palm):
-            self.critic_palm = copy.deepcopy(palm)
+        critic_is_prm = isinstance(critic_palm, ImplicitPRM)
+
+        critic_lora &= not critic_is_prm
+        pooled_values |= critic_is_prm
+
+        self.critic_is_prm = critic_is_prm
+
+        # critic
+
+        self.critic = critic_palm
+
+        if not exists(self.critic):
+            self.critic = copy.deepcopy(palm)
 
         self.actor_palm.set_dropout(actor_dropout)
-        self.critic_palm.set_dropout(critic_dropout)
+
+        if not critic_is_prm:
+            self.critic.set_dropout(critic_dropout)
 
         self.actor_lora = actor_lora
         self.critic_lora = critic_lora
@@ -79,16 +92,19 @@ class ActorCritic(Module):
             self.actor_palm.add_finetune_params(actor_lora_scope, lora_r = actor_lora_r)
 
         if self.critic_lora:
-            self.critic_palm.add_finetune_params(critic_lora_scope, lora_r = critic_lora_r)
+            self.critic.add_finetune_params(critic_lora_scope, lora_r = critic_lora_r)
 
         self.pooled_values = pooled_values
-        self.value_head = nn.Sequential(
-            nn.Linear(palm.dim, 1),
-            Rearrange('... 1 -> ...')
-        )
+        self.value_head = nn.Identity()
 
-        nn.init.zeros_(self.value_head[0].bias)
-        nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
+        if not critic_is_prm:
+            self.value_head = nn.Sequential(
+                nn.Linear(palm.dim, 1),
+                Rearrange('... 1 -> ...')
+            )
+
+            nn.init.zeros_(self.value_head[0].bias)
+            nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
 
     def actor_parameters(self):
         if not self.actor_lora:
@@ -99,11 +115,14 @@ class ActorCritic(Module):
         ]
 
     def critic_parameters(self):
+        if self.critic_is_prm:
+            return self.critic.parameters()
+
         if not self.actor_lora:
-            return [*self.critic_palm.parameters(), *self.value_head.parameters()]
+            return [*self.critic.parameters(), *self.value_head.parameters()]
 
         return [
-            *self.critic_palm.finetune_parameters(self.critic_lora_scope),
+            *self.critic.finetune_parameters(self.critic_lora_scope),
             *self.value_head.parameters()
         ]
 
@@ -170,7 +189,11 @@ class ActorCritic(Module):
         if not return_values:
             return action_logits, None
 
-        critic_embeds = self.critic_palm(
+        if self.critic_is_prm:
+            values = self.critic(x)
+            return action_logits, values
+
+        critic_embeds = self.critic(
             x,
             return_only_embedding = True,
             finetune_scope = self.critic_lora_scope
@@ -287,8 +310,8 @@ def clipped_value_loss(values, rewards, old_values, clip):
 
 # rlhf trainer
 
-@beartype
 class RLHFTrainer(Module):
+    @beartype
     def __init__(
         self,
         *,
@@ -298,7 +321,7 @@ class RLHFTrainer(Module):
         tokenizer: Callable | None = None,
         palm: PaLM,
         reward_model: RewardModel,
-        critic_palm: PaLM | None = None,
+        critic_palm: PaLM | ImplicitPRM | None = None,
         actor_critic: ActorCritic | None = None,
         actor_lr = 1e-4,
         critic_lr = 1e-4,
