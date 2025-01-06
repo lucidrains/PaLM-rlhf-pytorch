@@ -3,8 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from beartype import beartype
 
-from palm_rlhf_pytorch.palm import PaLM
-
 import torch
 from torch.nn import Module
 from torch.nn.functional import logsigmoid
@@ -56,7 +54,10 @@ class ImplicitPRM(Module):
         n - sequence
         l - logit dimension (num tokens)
         """
+
         source_seq, target_seq = seq[:, :-1], seq[:, 1:]
+
+        mask = target_seq >= 0 # assume any token ids < 0 to be padding
 
         model_logits = self.model(source_seq)
         ref_model_logits = self.ref_model(source_seq)
@@ -70,6 +71,10 @@ class ImplicitPRM(Module):
         # main formula is DPO-like, and has some connection with Q-learning https://arxiv.org/abs/2404.12358 . it is all connected
 
         implicit_rewards = self.beta * (log_prob - ref_log_prob)
+
+        # zero out rewards in padding
+
+        implicit_rewards = implicit_rewards.masked_fill(~mask, 0.)
 
         # early return if not training, as in Prime with alternating model and prm training
 
@@ -85,11 +90,13 @@ class ImplicitPRM(Module):
             (1. - labels) * logsigmoid(-implicit_rewards)  # (1. - sigmoid(x)) == sigmoid(-x)
         )
 
-        return loss.mean()
+        return loss[mask].mean()
 
 # make it easy for others to copy paste into another project
 
 if __name__ == '__main__':
+    from palm_rlhf_pytorch import PaLM
+
     palm = PaLM(
         num_tokens = 256,
         dim = 64,
