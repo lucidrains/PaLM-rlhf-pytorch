@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'PaLM-rlhf-pytorch',
   packages = find_packages(exclude=[]),
-  version = '0.3.9',
+  version = '0.4.0',
   license='MIT',
   description = 'PaLM + Reinforcement Learning with Human Feedback - Pytorch',
   author = 'Phil Wang',
@@ -22,8 +22,8 @@ setup(
     'accelerate',
     'adam-atan2-pytorch',
     'beartype',
-    'einops>=0.8',
-    'lion-pytorch',
+    'einx>=0.3.0',
+    'einops>=0.8.0',
     'torch>=2.2',
     'tqdm'
   ],

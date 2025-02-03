@@ -232,3 +232,14 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url     = {https://api.semanticscholar.org/CorpusID:274445748}
 }
 ```
+
+```bibtex
+@article{Shao2024DeepSeekMathPT,
+    title   = {DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models},
+    author  = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Jun-Mei Song and Mingchuan Zhang and Y. K. Li and Yu Wu and Daya Guo},
+    journal = {ArXiv},
+    year    = {2024},
+    volume  = {abs/2402.03300},
+    url     = {https://api.semanticscholar.org/CorpusID:267412607}
+}
+```

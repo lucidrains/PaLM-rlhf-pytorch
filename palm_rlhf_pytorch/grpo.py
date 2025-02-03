@@ -1,15 +1,12 @@
 from __future__ import annotations
+from typing import Callable, Deque
 
 import math
-from pathlib import Path
 import copy
-from accelerate.utils.tqdm import tqdm
+from pathlib import Path
 from functools import partial
 from collections import deque, namedtuple
 from random import randrange
-
-from beartype import beartype
-from beartype.typing import Callable, Deque
 
 import torch
 from torch import nn, Tensor
@@ -19,110 +16,66 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-from einops import rearrange, repeat, reduce
-from einops.layers.torch import Rearrange
-
 from adam_atan2_pytorch import AdoptAtan2
 
 from palm_rlhf_pytorch.palm import PaLM
 from palm_rlhf_pytorch.reward import RewardModel
-from palm_rlhf_pytorch.implicit_process_reward import ImplicitPRM
 from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
+
 from accelerate import Accelerator
+from accelerate.utils.tqdm import tqdm
 
-# actor critic - PaLM with lora
+from einx import get_at
+from einops import rearrange, repeat, reduce, pack, unpack
+from einops.layers.torch import Rearrange
 
-PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
+# einstein notation
+
+# b - batch 
+# n - sequence
+# d - feature dimension
+# l - logits
+
+# grpo based training
+
+# critic completely replaced with monte carlo sampling from actor + reward model
+# https://www.youtube.com/watch?v=bAWV_yrqx4w
+
+GRPOActionCriticReturn = namedtuple('GRPOActionCriticReturn', [
     'actions',
     'sequence',
     'mask',
     'prompt_mask',
     'action_logits',
-    'values'
 ])
 
-class ActorCritic(Module):
-    @beartype
+class Actor(Module):
     def __init__(
         self,
         palm: PaLM,
-        critic: PaLM | ImplicitPRM | None = None,
-        pooled_values = False,
         actor_lora = True,
-        critic_lora = True,
         actor_lora_r = 8,
-        critic_lora_r = 8,
         actor_lora_scope = 'actor',
-        critic_lora_scope = 'critic',
         actor_dropout = 0.,
-        critic_dropout = 0.
     ):
         super().__init__()
         self.actor_palm = palm
 
-        # detect implicit prm and auto-set some hyperparameters
-
-        critic_is_prm = isinstance(critic, ImplicitPRM)
-
-        critic_lora &= not critic_is_prm
-        pooled_values |= critic_is_prm
-
-        self.critic_is_prm = critic_is_prm
-
-        # critic
-
-        self.critic = critic
-
-        if not exists(self.critic):
-            self.critic = copy.deepcopy(palm)
-
         self.actor_palm.set_dropout(actor_dropout)
 
-        if not critic_is_prm:
-            self.critic.set_dropout(critic_dropout)
-
         self.actor_lora = actor_lora
-        self.critic_lora = critic_lora
 
         self.actor_lora_scope = actor_lora_scope if actor_lora else None
-        self.critic_lora_scope = critic_lora_scope if critic_lora else None
 
         if self.actor_lora:
             self.actor_palm.add_finetune_params(actor_lora_scope, lora_r = actor_lora_r)
 
-        if self.critic_lora:
-            self.critic.add_finetune_params(critic_lora_scope, lora_r = critic_lora_r)
-
-        self.pooled_values = pooled_values
-        self.value_head = nn.Identity()
-
-        if not critic_is_prm:
-            self.value_head = nn.Sequential(
-                nn.Linear(palm.dim, 1),
-                Rearrange('... 1 -> ...')
-            )
-
-            nn.init.zeros_(self.value_head[0].bias)
-            nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
-
-    def actor_parameters(self):
+    def parameters(self):
         if not self.actor_lora:
             return self.actor_palm.parameters()
 
         return [
             *self.actor_palm.finetune_parameters(self.actor_lora_scope)
-        ]
-
-    def critic_parameters(self):
-        if self.critic_is_prm:
-            return self.critic.parameters()
-
-        if not self.actor_lora:
-            return [*self.critic.parameters(), *self.value_head.parameters()]
-
-        return [
-            *self.critic.finetune_parameters(self.critic_lora_scope),
-            *self.value_head.parameters()
         ]
 
     @torch.no_grad()
@@ -132,7 +85,6 @@ class ActorCritic(Module):
         state,
         max_seq_len,
         eos_token = None,
-        return_values = False,
         **kwargs
     ):
         actions = self.actor_palm.generate(
@@ -159,52 +111,25 @@ class ActorCritic(Module):
             mask = F.pad(mask, (1, -1), value = True) # include eos token
             action_mask &= mask
 
-        action_logits, value = self.forward(
+        action_logits = self.forward(
             sequence,
             mask = action_mask,
-            return_values = return_values
         )        
 
-        return PPOActionCriticReturn(
+        return GRPOActionCriticReturn(
             actions,
             sequence,
             mask,
             prompt_mask,
-            action_logits,
-            value
+            action_logits
         )
 
     def forward(
         self,
         x,
         mask = None,
-        return_values = True
     ):
-        action_logits = self.actor_palm(
-            x,
-            finetune_scope = self.actor_lora_scope
-        )
-
-        if not return_values:
-            return action_logits, None
-
-        if self.critic_is_prm:
-            values = self.critic(x)
-            return action_logits, values
-
-        critic_embeds = self.critic(
-            x,
-            return_only_embedding = True,
-            finetune_scope = self.critic_lora_scope
-        )
-
-        if self.pooled_values:
-            critic_embeds = shift(critic_embeds, shift = 1, dim = -2)
-            critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
-
-        values = self.value_head(critic_embeds)
-
-        return action_logits, values
+        return self.actor_palm(x, finetune_scope = self.actor_lora_scope)
 
 # data
 
@@ -215,11 +140,11 @@ Memory = namedtuple('Memory', [
     'action_prob',
     'action_log_prob',
     'reward',
-    'value'
+    'reward_mean',
+    'reward_variance'
 ])
 
 class ExperienceDataset(Dataset):
-    @beartype
     def __init__(
         self,
         data,
@@ -249,15 +174,11 @@ def default(val, d):
         return val
     return d() if callable(d) else d
 
-def masked_normalize(t, eps = 1e-5, mask = None, dim = None):
-    dim = default(dim, tuple(range(t.ndim)))
-    kwargs = dict(dim = dim, keepdim = True)
+def first(x):
+    return x[0]
 
-    mean = masked_mean(t, mask = mask, **kwargs)
-    mean_centered = t - mean
-    var = masked_mean(mean_centered ** 2, mask = mask, **kwargs)
-
-    return mean_centered * var.clamp(min = eps).rsqrt()
+def divisible_by(num, den):
+    return (num % den) == 0
 
 def pad_sequence_fixed(sequences, *args, **kwargs):
     first_el = sequences[0]
@@ -269,17 +190,13 @@ def pad_sequence_fixed(sequences, *args, **kwargs):
 
     out = pad_sequence(sequences, *args, **kwargs)
 
-    if has_no_dimension:
-        out = rearrange(out, '... 1 -> ...')
+    if not has_no_dimension:
+        return out
 
-    return out
+    return rearrange(out, '... 1 -> ...')
 
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
-
-def log_prob(prob, indices):
-    assert prob.shape[:2] == indices.shape, f'preceding shapes of prob {prob.shape[:2]} and indices {indices.shape} must match'
-    return log(prob.gather(-1, indices[..., None])).squeeze(-1)
 
 def shift(t, value = 0, shift = 1, dim = -1):
     zeros = (0, 0) * (-dim - 1)
@@ -296,21 +213,15 @@ def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
     kl_divs = (prob1 * (log(prob1) - log(prob2))).sum(dim = -1)
     loss = masked_mean(kl_divs, mask)
 
-    if reduce_batch:
-        return loss.mean()
+    if not reduce_batch:
+        return loss
 
-    return loss
-
-def clipped_value_loss(values, rewards, old_values, clip):
-    value_clipped = old_values + (values - old_values).clamp(-clip, clip)
-    value_loss_1 = (value_clipped.flatten() - rewards) ** 2
-    value_loss_2 = (values.flatten() - rewards) ** 2
-    return torch.mean(torch.max(value_loss_1, value_loss_2))
+    return loss.mean()
 
 # rlhf trainer
 
 class RLHFTrainer(Module):
-    @beartype
+
     def __init__(
         self,
         *,
@@ -320,29 +231,21 @@ class RLHFTrainer(Module):
         tokenizer: Callable | None = None,
         palm: PaLM,
         reward_model: RewardModel,
-        critic: PaLM | ImplicitPRM | None = None,
-        actor_critic: ActorCritic | None = None,
+        grpo_num_times_sample_rewards = 10,
         actor_lr = 1e-4,
-        critic_lr = 1e-4,
         actor_wd = 0.,
-        critic_wd = 0.,
         actor_lora = True,
-        critic_lora = True,
         actor_lora_r = 8,
-        critic_lora_r = 8,
-        critic_pooled_values = True,
         actor_dropout = 0.,
-        critic_dropout = 0.,
         betas = (0.9, 0.999),
         max_norm = None,
         eps_clip = 0.2,
-        value_clip = 0.4,
         beta_s = .01,
         pad_value = 0.,
         minibatch_size = 16,
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
-        accelerate_kwargs: dict = {},
+        accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
 
@@ -369,20 +272,16 @@ class RLHFTrainer(Module):
 
         self.palm = palm
 
-        if not exists(actor_critic):
-            actor_critic = ActorCritic(
-                palm = palm,
-                critic = critic,
-                actor_lora = actor_lora,
-                critic_lora = critic_lora,
-                actor_lora_r = actor_lora_r,
-                critic_lora_r = critic_lora_r,
-                pooled_values = critic_pooled_values,
-                actor_dropout = actor_dropout,
-                critic_dropout = critic_dropout
-            ).to(palm.device)
+        actor = Actor(
+            palm = palm,
+            actor_lora = actor_lora,
+            actor_lora_r = actor_lora_r,
+            actor_dropout = actor_dropout,
+        )
 
-        self.actor_critic = actor_critic
+        self.actor = actor
+
+        self.actor_generate = self.actor.generate
 
         self.reward_model = reward_model.eval()
 
@@ -396,27 +295,27 @@ class RLHFTrainer(Module):
 
         # optimizers
 
-        self.actor_optim = AdoptAtan2(actor_critic.actor_parameters(), lr = actor_lr, weight_decay = actor_wd, betas = betas)
-        self.critic_optim = AdoptAtan2(actor_critic.critic_parameters(), lr = critic_lr, weight_decay = critic_wd, betas = betas)
+        self.actor_optim = AdoptAtan2(actor.parameters(), lr = actor_lr, weight_decay = actor_wd, betas = betas)
 
-        # ppo hyperparams
+        # grpo hyperparams
 
         self.eps_clip = eps_clip
-        self.value_clip = value_clip
         self.beta_s = beta_s
+
+        # grpo - the number of times to sample rewards for a given state (prompt) for normalization
+
+        self.grpo_num_times_sample_rewards = grpo_num_times_sample_rewards
 
         # prepare with accelerator
 
         (
-            self.actor_critic,
+            self.actor,
             self.reward_model,
             self.actor_optim,
-            self.critic_optim
         ) = self.accelerate.prepare(
-            self.actor_critic,
+            self.actor,
             self.reward_model,
             self.actor_optim,
-            self.critic_optim
         )
 
 
@@ -424,11 +323,11 @@ class RLHFTrainer(Module):
         return self.accelerate.print(msg)
 
     def save(self, filepath = './checkpoint.pt'):
-        torch.save(self.actor_critic.state_dict(), filepath)
+        torch.save(self.actor.state_dict(), filepath)
 
     def load(self, filepath = './checkpoint.pt'):
         state_dict = torch.load(filepath)
-        self.actor_critic.load_state_dict(state_dict)
+        self.actor.load_state_dict(state_dict)
 
     @property
     def device(self):
@@ -446,10 +345,10 @@ class RLHFTrainer(Module):
         assert prompt.ndim == 1, 'only one prompt allowed at a time for now'
         prompt = repeat(prompt, 'n -> b n', b = num_samples)
 
-        actor_critic = self.accelerate.unwrap_model(self.actor_critic)
+        actor = self.accelerate.unwrap_model(self.actor)
         reward_model = self.accelerate.unwrap_model(self.reward_model)
 
-        actor_critic.eval()
+        actor.eval()
 
         (
             actions,
@@ -458,11 +357,10 @@ class RLHFTrainer(Module):
             prompt_mask,
             action_logits,
             _
-        ) = actor_critic.generate(
+        ) = actor.generate(
             prompt,
             *args,
             max_seq_len = max_seq_len,
-            return_values = False,
             **kwargs
         )
 
@@ -492,9 +390,9 @@ class RLHFTrainer(Module):
 
         dl = create_dataloader(all_memories_stacked_and_padded, self.minibatch_size, device = self.device)
 
-        self.actor_critic.train()
+        self.actor.train()
 
-        # PPO training
+        # GRPO training
 
         for _ in range(self.epochs):
             for (
@@ -504,11 +402,15 @@ class RLHFTrainer(Module):
                 old_action_probs,
                 old_log_probs,
                 rewards,
-                old_values
+                rewards_mean,
+                rewards_variance
             ) in dl:
                 action_masks = ~prompt_masks & masks
 
-                action_logits, values = self.actor_critic(
+                values = torch.tensor(0.)
+                old_values = torch.tensor(0.)
+
+                action_logits = self.actor(
                     sequences,
                     mask = action_masks
                 )
@@ -517,7 +419,7 @@ class RLHFTrainer(Module):
                 action_len = old_log_probs.shape[-1]
 
                 action_probs = action_logits.softmax(dim = -1)
-                action_log_probs = log_prob(action_probs, sequences)
+                action_log_probs = get_at('b n [l], b n -> b n', action_probs, sequences)
                 action_log_probs = action_log_probs[:, -action_len:]
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
@@ -535,25 +437,10 @@ class RLHFTrainer(Module):
 
                 rewards = rewards - kl_penalty
 
-                # handle non-pooled values
-
-                normalize_kwargs = dict()
-
-                if old_values.ndim == 2:
-                    old_values, values = map(lambda t: shift(t, shift = 1, dim = -2), (old_values, values))
-
-                    old_values = old_values[:, -action_len:]
-                    values = values[:, -action_len:]
-                    rewards = rearrange(rewards, 'b -> b 1')
-                    normalize_kwargs = dict(dim = -1, mask = action_masks[:, -action_len:])
-
-                if values.ndim < rewards.ndim:
-                    values = rearrange(values, '... -> ... 1')
-
                 # calculate clipped surrogate objective, classic PPO loss
 
                 ratios = (action_log_probs - old_log_probs).exp()
-                advantages = masked_normalize(rewards - old_values, **normalize_kwargs)
+                advantages = (rewards - rewards_mean) / rewards_variance.clamp(min = 1e-5).sqrt()
 
                 if advantages.ndim == 1:
                     advantages = rearrange(advantages, 'b -> b 1')
@@ -573,25 +460,10 @@ class RLHFTrainer(Module):
                 self.print(f'policy_loss: {loss.item():.3f}')
 
                 if exists(self.max_norm):
-                    self.accelerator.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
+                    self.accelerator.clip_grad_norm_(self.actor.actor_parameters(), self.max_norm)
 
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
-
-                # calculate value loss and update value network separate from policy network
-
-                value_loss = clipped_value_loss(values, rewards.detach(), old_values, self.value_clip)
-                value_loss = value_loss.mean()
-
-                self.print(f'critic_loss: {value_loss.item():.3f}')
-
-                self.accelerate.backward(value_loss)
-
-                if exists(self.max_norm):
-                    self.accelerator.clip_grad_norm_(self.actor_critic.critic_parameters(), self.max_norm)
-
-                self.critic_optim.step()
-                self.critic_optim.zero_grad()
 
     def train(
         self,
@@ -603,6 +475,8 @@ class RLHFTrainer(Module):
         eos_token = None,
         temperature = 1.
     ):
+        action_sample_times = self.grpo_num_times_sample_rewards
+
         device = self.device
 
         time = 0
@@ -625,11 +499,9 @@ class RLHFTrainer(Module):
                 state_mask = state != self.pad_value
                 state = state[state_mask]
 
-                # Check if model is wrapped
-                if hasattr(self.actor_critic, "module"):
-                    generate = self.actor_critic.module.generate
-                else:
-                    generate = self.actor_critic.generate
+                # will sample each state more than once to get an estimate of the value, for removing the critic altogether from GRPO paper, Shao et al.
+
+                states = repeat(state, 'n -> b n', b = action_sample_times + 1)
 
                 # get predicted sequence
 
@@ -639,60 +511,65 @@ class RLHFTrainer(Module):
                     mask,
                     prompt_mask,
                     action_logits,
-                    value
-                ) = generate(
-                    rearrange(state, 'n -> 1 n'),
+                ) = self.actor_generate(
+                    states,
                     max_seq_len = max_seq_len,
                     eos_token = eos_token,
                     temperature = temperature,
-                    return_values = True
                 )
+
                 action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
                 action_prob = action_logits.softmax(dim = -1)
 
                 action_len = actions.shape[-1]
-                action_log_prob = log_prob(action_prob, sequence)
+                action_log_prob = get_at('b n [l], b n -> b n', action_prob, sequence)
                 action_log_prob = action_log_prob[:, -action_len:]
-
-                actions = rearrange(actions, '1 ... -> ...')
 
                 # get reward as given by supervised trained reward model
 
-                sequence = torch.cat((state, actions), dim = 0)
+                sequence = torch.cat((states, actions), dim = 1)
 
-                prompt_length = len(state)
+                prompt_length = states.shape[1]
                 prompt_mask = torch.arange(sequence.shape[-1], device = device) < prompt_length
+                prompt_mask = repeat(prompt_mask, 'n -> b n', b = action_sample_times + 1)
 
-                sequence = rearrange(sequence, 'n -> 1 n')
-                prompt_mask = rearrange(prompt_mask, 'n -> 1 n')
                 mask = default(mask, lambda: torch.ones(sequence.shape, dtype = torch.bool, device = device))
 
-                reward = self.reward_model(
+                rewards = self.reward_model(
                     sequence,
                     prompt_mask = prompt_mask,
                     mask = mask,
                     sample = True
                 )
 
-                detach_to_cpu_ = lambda t: rearrange(t.detach().cpu(), '1 ... -> ...')
+                rewards = rewards.float()
+
+                # use the first reward for training, the rest of them to derive statistics for normalization, iiuc
+
+                reward, rewards = rewards[0], rewards[1:]
+                print(rewards.shape)
+                rewards_mean, rewards_variance = rewards.mean(), rewards.var(unbiased = False)
 
                 # store memory for learning
 
+                detach_to_cpu_ = lambda t: t.detach().cpu()
+
                 memories.append(Memory(*map(detach_to_cpu_, (
-                    sequence,
-                    prompt_mask,
-                    mask,
-                    action_prob,
-                    action_log_prob,
+                    first(sequence),
+                    first(prompt_mask),
+                    first(mask),
+                    first(action_prob),
+                    first(action_log_prob),
                     reward,
-                    value
+                    rewards_mean,
+                    rewards_variance
                 ))))
 
                 # learn from the stored memories
 
-                if time % update_timesteps == 0:
+                if divisible_by(time, update_timesteps):
                     self.learn(memories)
                     memories.clear()
 
-        print('rlhf training complete')
+        print('grpo rlhf training complete')
