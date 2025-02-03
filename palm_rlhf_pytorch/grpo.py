@@ -1,3 +1,7 @@
+"""
+GRPO based training logic - https://arxiv.org/abs/2402.03300
+"""
+
 from __future__ import annotations
 from typing import Callable, Deque
 
