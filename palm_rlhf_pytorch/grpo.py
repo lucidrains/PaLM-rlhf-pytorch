@@ -143,9 +143,7 @@ Memory = namedtuple('Memory', [
     'mask',
     'action_prob',
     'action_log_prob',
-    'reward',
-    'reward_mean',
-    'reward_variance'
+    'group_relative_normalized_reward',
 ])
 
 class ExperienceDataset(Dataset):
@@ -406,13 +404,8 @@ class RLHFTrainer(Module):
                 old_action_probs,
                 old_log_probs,
                 rewards,
-                rewards_mean,
-                rewards_variance
             ) in dl:
                 action_masks = ~prompt_masks & masks
-
-                values = torch.tensor(0.)
-                old_values = torch.tensor(0.)
 
                 action_logits = self.actor(
                     sequences,
@@ -444,13 +437,9 @@ class RLHFTrainer(Module):
                 # calculate clipped surrogate objective, classic PPO loss
 
                 ratios = (action_log_probs - old_log_probs).exp()
-                advantages = (rewards - rewards_mean) / rewards_variance.clamp(min = 1e-5).sqrt()
 
-                if advantages.ndim == 1:
-                    advantages = rearrange(advantages, 'b -> b 1')
-
-                surr1 = ratios * advantages
-                surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
+                surr1 = ratios * rewards
+                surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * rewards
                 policy_loss = - torch.min(surr1, surr2) - self.beta_s * entropies
 
                 # combine losses
@@ -551,24 +540,20 @@ class RLHFTrainer(Module):
 
                 # use the first reward for training, the rest of them to derive statistics for normalization, iiuc
 
-                reward, rewards = rewards[0], rewards[1:]
-
-                rewards_mean, rewards_variance = rewards.mean(), rewards.var(unbiased = False)
+                normalized_rewards = (rewards - rewards.mean()) / rewards.var(unbiased = False).clamp(min = 1e-5).sqrt()
 
                 # store memory for learning
 
                 detach_to_cpu_ = lambda t: t.detach().cpu()
 
-                memories.append(Memory(*map(detach_to_cpu_, (
-                    first(sequence),
-                    first(prompt_mask),
-                    first(mask),
-                    first(action_prob),
-                    first(action_log_prob),
-                    reward,
-                    rewards_mean,
-                    rewards_variance
-                ))))
+                memories.extend([Memory(*memories) for memories in zip(*map(detach_to_cpu_, (
+                    sequence,
+                    prompt_mask,
+                    mask,
+                    action_prob,
+                    action_log_prob,
+                    normalized_rewards,
+                )))])
 
                 # learn from the stored memories
 
