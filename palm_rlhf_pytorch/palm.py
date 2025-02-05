@@ -126,6 +126,7 @@ class ParallelTransformerBlock(Module):
         qk_rmsnorm = False,
         qk_scale = 8,
         ff_mult = 4,
+        ff_inner_dim = None,
         attn_dropout = 0.,
         ff_dropout = 0.,
         use_xpos = True,
@@ -136,7 +137,8 @@ class ParallelTransformerBlock(Module):
         self.norm = LayerNorm(dim)
 
         attn_inner_dim = dim_head * heads
-        ff_inner_dim = dim * ff_mult
+        # silently ignores ff_mult if ff_inner_dim is provided in the arguments
+        ff_inner_dim = dim * ff_mult if not ff_inner_dim else self.ff_inner_dim
         self.fused_dims = (attn_inner_dim, dim_head, dim_head, (ff_inner_dim * 2))
 
         self.qk_rmsnorm = qk_rmsnorm
@@ -272,6 +274,7 @@ class PaLM(Module):
         dim_head = 64,
         heads = 8,
         ff_mult = 4,
+        ff_inner_dim = None,
         attn_dropout = 0.,
         ff_dropout = 0.,
         qk_rmsnorm = False,
@@ -299,6 +302,7 @@ class PaLM(Module):
                 heads = heads,
                 qk_rmsnorm = qk_rmsnorm,
                 ff_mult = ff_mult,
+                ff_inner_dim = ff_inner_dim,
                 attn_dropout = attn_dropout,
                 ff_dropout = ff_dropout,
                 xpos_scale_base = rotary_xpos_scale_base,
