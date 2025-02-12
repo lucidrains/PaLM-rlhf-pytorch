@@ -538,7 +538,7 @@ class RLHFTrainer(Module):
 
                 rewards = rewards.float()
 
-                # use the first reward for training, the rest of them to derive statistics for normalization, iiuc
+                # rewards are normalized for use as advantages
 
                 normalized_rewards = (rewards - rewards.mean()) / rewards.var(unbiased = False).clamp(min = 1e-5).sqrt()
 
