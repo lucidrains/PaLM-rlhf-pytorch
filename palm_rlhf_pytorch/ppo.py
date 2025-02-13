@@ -24,6 +24,8 @@ from einops.layers.torch import Rearrange
 
 from adam_atan2_pytorch import AdoptAtan2
 
+from hl_gauss_pytorch import HLGaussLoss
+
 from palm_rlhf_pytorch.palm import PaLM
 from palm_rlhf_pytorch.reward import RewardModel
 from palm_rlhf_pytorch.implicit_process_reward import ImplicitPRM
@@ -55,7 +57,8 @@ class ActorCritic(Module):
         actor_lora_scope = 'actor',
         critic_lora_scope = 'critic',
         actor_dropout = 0.,
-        critic_dropout = 0.
+        critic_dropout = 0.,
+        critic_dim_out = 6 # rewards from 0 to 5
     ):
         super().__init__()
         self.actor_palm = palm
@@ -97,13 +100,11 @@ class ActorCritic(Module):
         self.value_head = nn.Identity()
 
         if not critic_is_prm:
-            self.value_head = nn.Sequential(
-                nn.Linear(palm.dim, 1),
-                Rearrange('... 1 -> ...')
-            )
+            assert critic_dim_out > 1
+            self.value_head = nn.Linear(palm.dim, critic_dim_out)
 
-            nn.init.zeros_(self.value_head[0].bias)
-            nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
+            nn.init.zeros_(self.value_head.bias)
+            nn.init.orthogonal_(self.value_head.weight, gain = math.sqrt(2))
 
     def actor_parameters(self):
         if not self.actor_lora:
@@ -301,12 +302,6 @@ def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
 
     return loss
 
-def clipped_value_loss(values, rewards, old_values, clip):
-    value_clipped = old_values + (values - old_values).clamp(-clip, clip)
-    value_loss_1 = (value_clipped.flatten() - rewards) ** 2
-    value_loss_2 = (values.flatten() - rewards) ** 2
-    return torch.mean(torch.max(value_loss_1, value_loss_2))
-
 # rlhf trainer
 
 class RLHFTrainer(Module):
@@ -342,7 +337,14 @@ class RLHFTrainer(Module):
         minibatch_size = 16,
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
-        accelerate_kwargs: dict = {},
+        accelerate_kwargs: dict = dict(),
+        critic_num_pred_bins = 6,
+        hl_gauss_loss_kwargs: dict = dict(
+            min_value = 0.,
+            max_value = 5.,
+            min_max_value_on_bin_center = True,
+            clamp_to_range = True
+        )
     ):
         super().__init__()
 
@@ -379,12 +381,20 @@ class RLHFTrainer(Module):
                 critic_lora_r = critic_lora_r,
                 pooled_values = critic_pooled_values,
                 actor_dropout = actor_dropout,
-                critic_dropout = critic_dropout
+                critic_dropout = critic_dropout,
+                critic_dim_out = critic_num_pred_bins
             ).to(palm.device)
 
         self.actor_critic = actor_critic
 
+        self.actor_critic_generate = actor_critic.generate
+
         self.reward_model = reward_model.eval()
+
+        # critic outputs reward bin prediction
+        # for classification loss, buying into "Stop Regressing" paper from Farebrother et al. https://arxiv.org/abs/2403.03950
+
+        self.critic_hl_gauss_loss = HLGaussLoss(num_bins = critic_num_pred_bins, **hl_gauss_loss_kwargs)
 
         # train hyperparameters
 
@@ -497,6 +507,7 @@ class RLHFTrainer(Module):
         # PPO training
 
         for _ in range(self.epochs):
+
             for (
                 sequences,
                 prompt_masks,
@@ -504,11 +515,12 @@ class RLHFTrainer(Module):
                 old_action_probs,
                 old_log_probs,
                 rewards,
-                old_values
+                old_values_bins
             ) in dl:
+
                 action_masks = ~prompt_masks & masks
 
-                action_logits, values = self.actor_critic(
+                action_logits, values_bins = self.actor_critic(
                     sequences,
                     mask = action_masks
                 )
@@ -534,6 +546,12 @@ class RLHFTrainer(Module):
                 # subtract the kl penalty from the rewards
 
                 rewards = rewards - kl_penalty
+
+                # convert binned value predictions to scalar value
+
+                to_pred_value = self.critic_hl_gauss_loss.transform_from_logits
+
+                old_values, values = map(to_pred_value, (old_values_bins, values_bins))
 
                 # handle non-pooled values
 
@@ -578,10 +596,16 @@ class RLHFTrainer(Module):
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
 
-                # calculate value loss and update value network separate from policy network
+                # calculate clipped value loss and update value network separate from policy network
 
-                value_loss = clipped_value_loss(values, rewards.detach(), old_values, self.value_clip)
-                value_loss = value_loss.mean()
+                value_clipped = old_values + (values - old_values).clamp(-self.value_clip, self.value_clip)
+
+                rewards.detach_()
+
+                value_loss_1 = self.critic_hl_gauss_loss(value_clipped, rewards, reduction = 'none')
+                value_loss_2 = self.critic_hl_gauss_loss(values_bins, rewards, reduction = 'none')
+
+                value_loss = torch.maximum(value_loss_1, value_loss_2).mean()
 
                 self.print(f'critic_loss: {value_loss.item():.3f}')
 
@@ -625,12 +649,6 @@ class RLHFTrainer(Module):
                 state_mask = state != self.pad_value
                 state = state[state_mask]
 
-                # Check if model is wrapped
-                if hasattr(self.actor_critic, "module"):
-                    generate = self.actor_critic.module.generate
-                else:
-                    generate = self.actor_critic.generate
-
                 # get predicted sequence
 
                 (
@@ -639,14 +657,15 @@ class RLHFTrainer(Module):
                     mask,
                     prompt_mask,
                     action_logits,
-                    value
-                ) = generate(
-                    rearrange(state, 'n -> 1 n'),
+                    values_bins
+                ) = self.actor_critic_generate(
+                    rearrange(state, 'n ... -> 1 n ...'),
                     max_seq_len = max_seq_len,
                     eos_token = eos_token,
                     temperature = temperature,
                     return_values = True
                 )
+
                 action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
                 action_prob = action_logits.softmax(dim = -1)
@@ -686,7 +705,7 @@ class RLHFTrainer(Module):
                     action_prob,
                     action_log_prob,
                     reward,
-                    value
+                    values_bins
                 ))))
 
                 # learn from the stored memories
