@@ -20,6 +20,9 @@ from palm_rlhf_pytorch.palm import PaLM
 def exists(val):
     return val is not None
 
+def default(val, default_val):
+    return val if exists(val) else default_val
+
 # Reward Model - PaLM with a scalar head
 
 class RewardModel(Module):
@@ -32,6 +35,8 @@ class RewardModel(Module):
         use_lora = True,
         lora_r = 8,
         reward_lora_scope = 'reward',
+        sample_from_bins = None,
+        sample_temperature = 1.
     ):
         super().__init__()
 
@@ -58,6 +63,9 @@ class RewardModel(Module):
                 Rearrange('... 1 -> ...')
             )
 
+        self.sample_from_bins = default(sample_from_bins, self.binned_output)
+        self.sample_temperature = sample_temperature
+
     def load(self, path):
         path = Path(path)
         assert path.exists()
@@ -76,8 +84,6 @@ class RewardModel(Module):
         prompt_mask = None,
         prompt_lengths = None,
         labels = None,
-        sample = False,
-        sample_temperature = 1.,
         disable_lora = False
     ):
 
@@ -114,9 +120,9 @@ class RewardModel(Module):
         pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
 
-        if sample and self.binned_output:
+        if self.sample_from_bins and self.binned_output:
             assert not exists(labels)
-            pred = gumbel_sample(pred, temperature = sample_temperature, dim = -1)
+            pred = gumbel_sample(pred, temperature = self.sample_temperature, dim = -1)
 
         if not exists(labels):
             return pred

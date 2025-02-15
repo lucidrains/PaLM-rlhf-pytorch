@@ -369,8 +369,7 @@ class RLHFTrainer(Module):
         rewards = reward_model(
             sequences,
             prompt_mask = prompt_mask,
-            mask = mask,
-            sample = True
+            mask = mask
         )
 
         best_sequence_index = rewards.topk(1, dim = -1).indices

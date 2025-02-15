@@ -480,8 +480,7 @@ class RLHFTrainer(Module):
         rewards = reward_model(
             sequences,
             prompt_mask = prompt_mask,
-            mask = mask,
-            sample = True
+            mask = mask
         )
 
         best_sequence_index = rewards.topk(1, dim = -1).indices
@@ -691,8 +690,7 @@ class RLHFTrainer(Module):
                 reward = self.reward_model(
                     sequence,
                     prompt_mask = prompt_mask,
-                    mask = mask,
-                    sample = True
+                    mask = mask
                 )
 
                 detach_to_cpu_ = lambda t: rearrange(t.detach().cpu(), '1 ... -> ...')
