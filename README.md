@@ -254,3 +254,11 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url    = {https://api.semanticscholar.org/CorpusID:268253088}
 }
 ```
+
+```bibtex
+@misc{Liu2025,
+    title   = {Understanding R1-Zero-Like Training: A Critical Perspective},
+    author  = {Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, Min Lin},
+    url     = {https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf}
+}
+```
