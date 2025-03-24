@@ -538,8 +538,9 @@ class RLHFTrainer(Module):
                 rewards = rewards.float()
 
                 # rewards are normalized for use as advantages
+                # following Dr. GRPO paper from Sea AI labs, remove the standard deviation
 
-                normalized_rewards = (rewards - rewards.mean()) / rewards.var(unbiased = False).clamp(min = 1e-5).sqrt()
+                normalized_rewards = (rewards - rewards.mean()) / (action_sample_times + 1)
 
                 # store memory for learning
 
@@ -560,4 +561,4 @@ class RLHFTrainer(Module):
                     self.learn(memories)
                     memories.clear()
 
-        print('grpo rlhf training complete')
+        print('dr grpo rlhf training complete')
