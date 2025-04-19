@@ -33,6 +33,8 @@ from einx import get_at
 from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
+from evolutionary_policy_optimization import LatentGenePool
+
 # einstein notation
 
 # b - batch 
