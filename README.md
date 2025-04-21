@@ -263,7 +263,7 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 }
 ```
 
-```
+```bibtex
 @inproceedings{Wang2025EvolutionaryPO,
     title = {Evolutionary Policy Optimization},
     author = {Jianren Wang and Yifan Su and Abhinav Gupta and Deepak Pathak},

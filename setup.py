@@ -24,7 +24,7 @@ setup(
     'beartype',
     'einx>=0.3.0',
     'einops>=0.8.0',
-    'evolutionary-policy-optimization>=0.0.32',
+    'evolutionary-policy-optimization>=0.0.55',
     'hl-gauss-pytorch>=0.1.19',
     'torch>=2.2',
     'tqdm'

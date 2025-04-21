@@ -1,5 +1,6 @@
 """
-GRPO based training logic - https://arxiv.org/abs/2402.03300
+GRPO with evolution faciliated exploration
+https://web3.arxiv.org/abs/2503.19037
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from einx import get_at
 from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
+from evolutionary_policy_optimization import LatentGenePool
+
 # einstein notation
 
 # b - batch 
@@ -40,10 +43,7 @@ from einops.layers.torch import Rearrange
 # d - feature dimension
 # l - logits
 
-# grpo based training
-
-# critic completely replaced with monte carlo sampling from actor + reward model
-# https://www.youtube.com/watch?v=bAWV_yrqx4w
+# grpo based training with evolution
 
 GRPOActionReturn = namedtuple('GRPOActionReturn', [
     'actions',
