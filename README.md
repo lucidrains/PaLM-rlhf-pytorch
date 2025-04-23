@@ -264,10 +264,10 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 ```
 
 ```bibtex
-@inproceedings{Wang2025EvolutionaryPO,
-    title = {Evolutionary Policy Optimization},
-    author = {Jianren Wang and Yifan Su and Abhinav Gupta and Deepak Pathak},
-    year  = {2025},
-    url   = {https://api.semanticscholar.org/CorpusID:277313729}
+@inproceedings{Yue2025DoesRL,
+    title   = {Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?},
+    author  = {Yang Yue and Zhiqi Chen and Rui Lu and Andrew Zhao and Zhaokai Wang and Shiji Song and Gao Huang},
+    year    = {2025},
+    url     = {https://api.semanticscholar.org/CorpusID:277940134}
 }
 ```
