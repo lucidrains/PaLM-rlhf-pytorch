@@ -247,6 +247,7 @@ class RLHFTrainer(Module):
         minibatch_size = 16,
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
+        use_simple_policy_optimization = False, # Xie et al. https://arxiv.org/abs/2401.16025v9
         accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
@@ -298,6 +299,10 @@ class RLHFTrainer(Module):
         # optimizers
 
         self.actor_optim = AdoptAtan2(actor.parameters(), lr = actor_lr, weight_decay = actor_wd, betas = betas)
+
+        # spo
+
+        self.use_spo = use_simple_policy_optimization
 
         # grpo hyperparams
 
@@ -437,9 +442,19 @@ class RLHFTrainer(Module):
 
                 ratios = (action_log_probs - old_log_probs).exp()
 
-                surr1 = ratios * rewards
-                surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * rewards
-                policy_loss = - torch.min(surr1, surr2) - self.beta_s * entropies
+                # SPO - Line 14 Algorithm 1 - https://arxiv.org/abs/2401.16025v9
+                # else classic ppo
+
+                if self.use_spo:
+                    policy_loss = - (ratios * rewards) + (ratios - 1.).square() * (rewards.abs() / (2 * self.eps_clip))
+                else:
+                    surr1 = ratios * rewards
+                    surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * rewards
+                    policy_loss = - torch.min(surr1, surr2)
+
+                # entropy loss
+
+                policy_loss = policy_loss - self.beta_s * entropies
 
                 # combine losses
 
@@ -532,7 +547,6 @@ class RLHFTrainer(Module):
                     sequence,
                     prompt_mask = prompt_mask,
                     mask = mask,
-                    sample = True
                 )
 
                 rewards = rewards.float()
