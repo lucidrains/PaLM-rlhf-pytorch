@@ -120,11 +120,16 @@ class RewardModel(Module):
         pooled = masked_mean(embeds, mask, dim = 1)
         pred = self.to_pred(pooled)
 
-        if self.sample_from_bins and self.binned_output:
-            assert not exists(labels)
+        is_inferencing = not exists(labels)
+
+        if (
+            self.sample_from_bins and
+            self.binned_output and
+            is_inferencing
+        ):
             pred = gumbel_sample(pred, temperature = self.sample_temperature, dim = -1)
 
-        if not exists(labels):
+        if is_inferencing:
             return pred
 
         if not self.binned_output:
