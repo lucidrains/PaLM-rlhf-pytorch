@@ -34,6 +34,8 @@ There is no trained model. This is just the ship and overall map. We still need 
 
 - <a href="https://github.com/conceptofmind">Enrico</a> for integrating <a href="https://arxiv.org/abs/2205.14135">Flash Attention</a> from Pytorch 2.0
 
+- [bycloud](https://www.youtube.com/@bycloudAI) for his educational video for [Reasoning with Exploration](https://www.youtube.com/watch?v=uOrJUksvIhs)
+
 ## Install
 
 ```bash
