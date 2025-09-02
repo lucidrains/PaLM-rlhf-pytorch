@@ -29,7 +29,7 @@ from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
 from accelerate import Accelerator
 from accelerate.utils.tqdm import tqdm
 
-from einx import get_at
+import einx
 from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
@@ -204,9 +204,8 @@ def shift(t, value = 0, shift = 1, dim = -1):
     zeros = (0, 0) * (-dim - 1)
     return F.pad(t, (*zeros, shift, -shift), value = value)
 
-def masked_entropy(prob, dim = -1, mask = None):
-    entropies = (prob * log(prob)).sum(dim = -1)
-    return masked_mean(entropies, mask = mask).mean()
+def entropy(prob, dim = -1):
+    return (prob * log(prob)).sum(dim = -1)
 
 def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
     """
@@ -248,6 +247,9 @@ class RLHFTrainer(Module):
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
         use_simple_policy_optimization = False, # Xie et al. https://arxiv.org/abs/2401.16025v9
+        add_entropy_to_advantage = False,
+        entropy_to_advantage_kappa = 2.,
+        entropy_to_advantage_scale = 0.4,   # they use 0.4 for GRPO, 0.1 for PPO
         accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
@@ -303,6 +305,12 @@ class RLHFTrainer(Module):
         # spo
 
         self.use_spo = use_simple_policy_optimization
+
+        # "reasoning from exploration" paper
+
+        self.add_entropy_to_advantage = add_entropy_to_advantage
+        self.entropy_to_advantage_scale = entropy_to_advantage_scale
+        self.entropy_to_advantage_kappa = entropy_to_advantage_kappa
 
         # grpo hyperparams
 
@@ -407,7 +415,7 @@ class RLHFTrainer(Module):
                 masks,
                 old_action_probs,
                 old_log_probs,
-                rewards,
+                advantages,
             ) in dl:
                 action_masks = ~prompt_masks & masks
 
@@ -420,12 +428,13 @@ class RLHFTrainer(Module):
                 action_len = old_log_probs.shape[-1]
 
                 action_probs = action_logits.softmax(dim = -1)
-                action_log_probs = get_at('b n [l], b n -> b n', action_probs, sequences)
+                action_log_probs = einx.get_at('b n [l], b n -> b n', action_probs, sequences)
+
                 action_log_probs = action_log_probs[:, -action_len:]
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
 
-                entropies = masked_entropy(action_probs, mask = action_masks)
+                per_token_entropies = entropy(action_probs)
 
                 # calculate kl div between old action probs and new ones, taking into account which part of the sequence is action or not
 
@@ -434,9 +443,24 @@ class RLHFTrainer(Module):
                 if self.kl_div_loss_weight > 0:
                     kl_penalty = masked_kl_div(old_action_probs, action_probs, mask = action_masks) * self.kl_div_loss_weight
 
-                # subtract the kl penalty from the rewards
+                # subtract the kl penalty from the advantages
 
-                rewards = rewards - kl_penalty
+                advantages = advantages - kl_penalty
+
+                # to encourage exploration, they add per token entropies
+
+                if self.add_entropy_to_advantage:
+                    entropy_scale, kappa = self.entropy_to_advantage_scale, self.entropy_to_advantage_kappa
+
+                    entropy_reward = entropy_scale * per_token_entropies[..., -action_len:].detach()
+                    max_entropy_reward = rearrange(advantages / kappa, 'b -> b 1')
+
+                    advantages = einx.add('b, b n', advantages, entropy_reward.clamp(max = max_entropy_reward))
+
+                else:
+                    advantages = rearrange(advantages, 'b -> b 1')
+
+                entropies = masked_mean(per_token_entropies, mask = action_masks)
 
                 # calculate clipped surrogate objective, classic PPO loss
 
@@ -446,15 +470,15 @@ class RLHFTrainer(Module):
                 # else classic ppo
 
                 if self.use_spo:
-                    policy_loss = - (ratios * rewards) + (ratios - 1.).square() * (rewards.abs() / (2 * self.eps_clip))
+                    policy_loss = - (ratios * advantages) + (ratios - 1.).square() * (advantages.abs() / (2 * self.eps_clip))
                 else:
-                    surr1 = ratios * rewards
-                    surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * rewards
+                    surr1 = ratios * advantages
+                    surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
                     policy_loss = - torch.min(surr1, surr2)
 
                 # entropy loss
 
-                policy_loss = policy_loss - self.beta_s * entropies
+                policy_loss = policy_loss.mean(dim = -1) - self.beta_s * entropies
 
                 # combine losses
 
@@ -530,7 +554,8 @@ class RLHFTrainer(Module):
                 action_prob = action_logits.softmax(dim = -1)
 
                 action_len = actions.shape[-1]
-                action_log_prob = get_at('b n [l], b n -> b n', action_prob, sequence)
+
+                action_log_prob = einx.get_at('b n [l], b n -> b n', action_prob, sequence)
                 action_log_prob = action_log_prob[:, -action_len:]
 
                 # get reward as given by supervised trained reward model
