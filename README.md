@@ -283,3 +283,15 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url = {https://arxiv.org/abs/2401.16025}, 
 }
 ```
+
+```bibtex
+@misc{cheng2025reasoningexplorationentropyperspective,
+    title   = {Reasoning with Exploration: An Entropy Perspective on Reinforcement Learning for LLMs}, 
+    author  = {Daixuan Cheng and Shaohan Huang and Xuekai Zhu and Bo Dai and Wayne Xin Zhao and Zhenliang Zhang and Furu Wei},
+    year    = {2025},
+    eprint  = {2506.14758},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CL},
+    url     = {https://arxiv.org/abs/2506.14758}, 
+}
+```
