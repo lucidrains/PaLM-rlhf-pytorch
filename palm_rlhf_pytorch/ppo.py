@@ -395,7 +395,7 @@ class RLHFTrainer(Module):
         # critic outputs reward bin prediction
         # for classification loss, buying into "Stop Regressing" paper from Farebrother et al. https://arxiv.org/abs/2403.03950
 
-        self.critic_hl_gauss_loss = HLGaussLoss(num_bins = critic_num_pred_bins, **hl_gauss_loss_kwargs)
+        self.critic_hl_gauss_loss = HLGaussLoss(num_bins = critic_num_pred_bins, **hl_gauss_loss_kwargs).to(palm.device)
 
         # train hyperparameters
 
