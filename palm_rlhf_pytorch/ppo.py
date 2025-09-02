@@ -287,7 +287,7 @@ def shift(t, value = 0, shift = 1, dim = -1):
     return F.pad(t, (*zeros, shift, -shift), value = value)
 
 def masked_entropy(prob, dim = -1, mask = None):
-    entropies = (prob * log(prob)).sum(dim = -1)
+    entropies = (-prob * log(prob)).sum(dim = -1)
     return masked_mean(entropies, mask = mask).mean()
 
 def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):

@@ -205,7 +205,7 @@ def shift(t, value = 0, shift = 1, dim = -1):
     return F.pad(t, (*zeros, shift, -shift), value = value)
 
 def entropy(prob, dim = -1):
-    return (prob * log(prob)).sum(dim = -1)
+    return (-prob * log(prob)).sum(dim = -1)
 
 def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
     """
@@ -453,7 +453,7 @@ class RLHFTrainer(Module):
                     entropy_scale, kappa = self.entropy_to_advantage_scale, self.entropy_to_advantage_kappa
 
                     entropy_reward = entropy_scale * per_token_entropies[..., -action_len:].detach()
-                    max_entropy_reward = rearrange(advantages / kappa, 'b -> b 1')
+                    max_entropy_reward = rearrange(advantages.abs() / kappa, 'b -> b 1')
 
                     advantages = einx.add('b, b n', advantages, entropy_reward.clamp(max = max_entropy_reward))
 
