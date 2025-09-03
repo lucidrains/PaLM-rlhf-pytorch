@@ -25,13 +25,16 @@ SEQ_LEN = 1024
 
 # helpers
 
+
 def cycle(loader):
     while True:
         for data in loader:
             yield data
 
+
 def decode_token(token):
     return str(chr(max(32, token)))
+
 
 def decode_tokens(tokens):
     return "".join(list(map(decode_token, tokens)))
@@ -44,12 +47,7 @@ device = accelerator.device
 
 # instantiate palm
 
-model = PaLM(
-    num_tokens=256,
-    dim=512,
-    depth=8,
-    flash_attn=True
-).to(device)
+model = PaLM(num_tokens=256, dim=256, depth=4, flash_attn=True).to(device)
 
 # prepare enwik8 data
 
@@ -57,6 +55,7 @@ with gzip.open("./data/enwik8.gz") as file:
     data = np.frombuffer(file.read(int(95e6)), dtype=np.uint8).copy()
     np_train, np_valid = np.split(data, [int(90e6)])
     data_train, data_val = torch.from_numpy(np_train), torch.from_numpy(np_valid)
+
 
 class TextSamplerDataset(Dataset):
     def __init__(self, data, seq_len):
@@ -72,6 +71,7 @@ class TextSamplerDataset(Dataset):
     def __len__(self):
         return self.data.size(0) // self.seq_len
 
+
 train_dataset = TextSamplerDataset(data_train, SEQ_LEN)
 val_dataset = TextSamplerDataset(data_val, SEQ_LEN)
 train_loader = cycle(DataLoader(train_dataset, batch_size=BATCH_SIZE))
@@ -79,7 +79,7 @@ val_loader = cycle(DataLoader(val_dataset, batch_size=BATCH_SIZE))
 
 # optimizer
 
-optim = Lion(model.palm_parameters(), lr = LEARNING_RATE)
+optim = Lion(model.palm_parameters(), lr=LEARNING_RATE)
 
 model, optim, train_loader, val_loader = accelerator.prepare(
     model, optim, train_loader, val_loader
@@ -91,19 +91,19 @@ for i in tqdm(range(NUM_BATCHES), mininterval=10.0, desc="training"):
     model.train()
 
     with accelerator.accumulate(model):
-        loss = model(next(train_loader), return_loss = True)
+        loss = model(next(train_loader), return_loss=True)
         accelerator.backward(loss / GRADIENT_ACCUMULATE_EVERY)
 
         accelerator.print(f"training loss: {loss.item()}")
         accelerator.clip_grad_norm_(model.parameters(), 0.5)
-    
+
         optim.step()
         optim.zero_grad()
 
     if i % VALIDATE_EVERY == 0:
         model.eval()
         with torch.no_grad():
-            loss = model(next(val_loader), return_loss = True)
+            loss = model(next(val_loader), return_loss=True)
             accelerator.print(f"validation loss: {loss.item()}")
 
     if i % GENERATE_EVERY == 0:
