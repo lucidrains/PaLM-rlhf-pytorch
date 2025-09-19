@@ -297,3 +297,17 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url     = {https://arxiv.org/abs/2506.14758}, 
 }
 ```
+
+```bibtex
+@article{Zhu2025FlowRL,
+    title   = {FlowRL: Matching Reward Distributions for LLM Reasoning},
+    author  = {Xuekai Zhu and Daixuan Cheng and Dinghuai Zhang and Hengli Li and Kaiyan Zhang and Che Jiang and Youbang Sun and Ermo Hua and Yuxin Zuo and Xingtai Lv and Qizheng Zhang and Lin Chen and Fanghao Shao and Bo Xue and Yunchong Song and Zhenjie Yang and Ganqu Cui and Ning Ding and Jianfeng Gao and Xiaodong Liu and Bowen Zhou and Hongyuan Mei and Zhouhan Lin},
+    journal = {ArXiv},
+    year    = {2025},
+    volume  = {abs/2509.15207},
+    eprint  = {2509.15207},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.LG},
+    url     = {https://arxiv.org/abs/2509.15207}
+}
+```
