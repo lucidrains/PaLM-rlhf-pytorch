@@ -326,12 +326,12 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
 
 ```bibtex
 @misc{tajwar2026maximumlikelihoodreinforcementlearning,
-    title   = {Maximum Likelihood Reinforcement Learning}, 
+    title   = {Maximum Likelihood Reinforcement Learning},
     author  = {Fahim Tajwar and Guanning Zeng and Yueer Zhou and Yuda Song and Daman Arora and Yiding Jiang and Jeff Schneider and Ruslan Salakhutdinov and Haiwen Feng and Andrea Zanette},
     year    = {2026},
     eprint  = {2602.02710},
     archivePrefix = {arXiv},
     primaryClass = {cs.LG},
-    url     = {https://arxiv.org/abs/2602.02710}, 
+    url     = {https://arxiv.org/abs/2602.02710},
 }
 ```

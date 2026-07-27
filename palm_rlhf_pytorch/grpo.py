@@ -13,7 +13,7 @@ from collections import deque, namedtuple
 from random import randrange
 
 import torch
-from torch import nn, Tensor, is_tensor
+from torch import nn, Tensor, is_tensor, tensor
 from torch.nn import Module
 import torch.nn.functional as F
 
@@ -197,12 +197,17 @@ def pad_sequence_fixed(sequences, *args, **kwargs):
 
     return rearrange(out, '... 1 -> ...')
 
+def cast_tensor(val, **kwargs):
+    if is_tensor(val):
+        return val
+    return tensor(val, **kwargs)
+
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
 def safe_div(num, den, eps = 1e-8):
-    if not is_tensor(den):
-        return num / max(den, eps)
+    den = cast_tensor(den)
+    assert (den >= 0).all()
     return num / den.clamp(min = eps)
 
 def shift(t, value = 0, shift = 1, dim = -1):
@@ -250,12 +255,14 @@ class RLHFTrainer(Module):
         pad_value = 0.,
         minibatch_size = 16,
         epochs = 1,
-        kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
+        kl_div_loss_weight = 0.1,               # between old action probs and new action probs - not sure what the right value is
         use_simple_policy_optimization = False, # Xie et al. https://arxiv.org/abs/2401.16025v9
-        use_max_rl = False, # maxRL - https://arxiv.org/abs/2602.02710
+        use_dr_grpo = False,                    # Sea AI lab - https://arxiv.org/abs/2503.20783
+        dr_grpo_constant = None,                # constant scaling factor for Dr. GRPO (defaults to action_sample_times + 1)
+        use_max_rl = False,                     # maxRL - https://arxiv.org/abs/2602.02710
         add_entropy_to_advantage = False,
         entropy_to_advantage_kappa = 2.,
-        entropy_to_advantage_scale = 0.4,   # they use 0.4 for GRPO, 0.1 for PPO
+        entropy_to_advantage_scale = 0.4,       # they use 0.4 for GRPO, 0.1 for PPO
         accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
@@ -312,9 +319,16 @@ class RLHFTrainer(Module):
 
         self.use_spo = use_simple_policy_optimization
 
+        # dr grpo
+
+        self.use_dr_grpo = use_dr_grpo or exists(dr_grpo_constant)
+        self.dr_grpo_constant = dr_grpo_constant
+
         # maxrl
 
         self.use_max_rl = use_max_rl
+
+        assert not (self.use_dr_grpo and self.use_max_rl), 'cannot use both Dr. GRPO and MaxRL'
 
         # "reasoning from exploration" paper
 
@@ -587,10 +601,16 @@ class RLHFTrainer(Module):
                 rewards = rewards.float()
 
                 # rewards are normalized for use as advantages
-                # following Dr. GRPO paper from Sea AI labs, remove the standard deviation
-                # or MaxRL (https://arxiv.org/abs/2602.02710) which divides by average reward
+                # 1. Dr. GRPO (Sea AI Lab https://arxiv.org/abs/2503.20783) - removes standard deviation, normalizes by constant
+                # 2. MaxRL (https://arxiv.org/abs/2602.02710) - normalizes by average reward
+                # 3. Old way (Shao et al. https://arxiv.org/abs/2402.03300) - normalizes by standard deviation
 
-                divisor = rewards.mean() if self.use_max_rl else (action_sample_times + 1)
+                if self.use_dr_grpo:
+                    divisor = default(self.dr_grpo_constant, action_sample_times + 1)
+                elif self.use_max_rl:
+                    divisor = rewards.mean()
+                else:
+                    divisor = rewards.std()
 
                 normalized_rewards = safe_div(rewards - rewards.mean(), divisor)
 
