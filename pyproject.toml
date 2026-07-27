@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "PaLM-rlhf-pytorch"
-version = "0.7.3"
+version = "0.7.4"
 description = "PaLM + Reinforcement Learning with Human Feedback - Pytorch"
 readme = "README.md"
 requires-python = ">= 3.6"

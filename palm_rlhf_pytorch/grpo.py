@@ -13,7 +13,7 @@ from collections import deque, namedtuple
 from random import randrange
 
 import torch
-from torch import nn, Tensor
+from torch import nn, Tensor, is_tensor
 from torch.nn import Module
 import torch.nn.functional as F
 
@@ -200,6 +200,11 @@ def pad_sequence_fixed(sequences, *args, **kwargs):
 def log(t, eps = 1e-20):
     return torch.log(t.clamp(min = eps))
 
+def safe_div(num, den, eps = 1e-8):
+    if not is_tensor(den):
+        return num / max(den, eps)
+    return num / den.clamp(min = eps)
+
 def shift(t, value = 0, shift = 1, dim = -1):
     zeros = (0, 0) * (-dim - 1)
     return F.pad(t, (*zeros, shift, -shift), value = value)
@@ -247,6 +252,7 @@ class RLHFTrainer(Module):
         epochs = 1,
         kl_div_loss_weight = 0.1, # between old action probs and new action probs - not sure what the right value is
         use_simple_policy_optimization = False, # Xie et al. https://arxiv.org/abs/2401.16025v9
+        use_max_rl = False, # maxRL - https://arxiv.org/abs/2602.02710
         add_entropy_to_advantage = False,
         entropy_to_advantage_kappa = 2.,
         entropy_to_advantage_scale = 0.4,   # they use 0.4 for GRPO, 0.1 for PPO
@@ -305,6 +311,10 @@ class RLHFTrainer(Module):
         # spo
 
         self.use_spo = use_simple_policy_optimization
+
+        # maxrl
+
+        self.use_max_rl = use_max_rl
 
         # "reasoning from exploration" paper
 
@@ -578,8 +588,11 @@ class RLHFTrainer(Module):
 
                 # rewards are normalized for use as advantages
                 # following Dr. GRPO paper from Sea AI labs, remove the standard deviation
+                # or MaxRL (https://arxiv.org/abs/2602.02710) which divides by average reward
 
-                normalized_rewards = (rewards - rewards.mean()) / (action_sample_times + 1)
+                divisor = rewards.mean() if self.use_max_rl else (action_sample_times + 1)
+
+                normalized_rewards = safe_div(rewards - rewards.mean(), divisor)
 
                 # store memory for learning
 
