@@ -49,6 +49,7 @@ def gumbel_sample(t, temperature = 1., dim = -1):
     return ((t / max(temperature, 1e-10)) + gumbel_noise(t)).argmax(dim = dim)
 
 def top_p(logits, thres = 0.9):
+    """Filter logits by cumulative probability while restoring original order."""
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
     cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
 
@@ -56,8 +57,12 @@ def top_p(logits, thres = 0.9):
     sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
     sorted_indices_to_remove[:, 0] = 0
 
-    sorted_logits[sorted_indices_to_remove] = float('-inf')
-    return sorted_logits.scatter(1, sorted_indices, sorted_logits)
+    filtered_sorted_logits = sorted_logits.masked_fill(sorted_indices_to_remove, float('-inf'))
+    # ``sorted_logits`` is in rank order, while callers expect the vocabulary
+    # order.  Scatter the filtered values into a fresh tensor; scattering back
+    # into the sorted tensor leaves probabilities attached to the wrong tokens.
+    filtered_logits = torch.full_like(logits, float('-inf'))
+    return filtered_logits.scatter(1, sorted_indices, filtered_sorted_logits)
 
 def top_k(logits, thres = 0.9):
     k = math.ceil((1 - thres) * logits.shape[-1])
