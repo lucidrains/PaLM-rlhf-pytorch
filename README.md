@@ -335,3 +335,15 @@ answer = trainer.generate(2048, prompt = prompts[0], num_samples = 10) # (<= 204
     url     = {https://arxiv.org/abs/2602.02710},
 }
 ```
+
+```bibtex
+@misc{marek2026scorecenteringstabilizesoffpolicy,
+    title   = {Score Centering Stabilizes Off-policy Reinforcement Learning}, 
+    author  = {Martin Marek and Max Ryabinin},
+    year    = {2026},
+    eprint  = {2609.20807},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.LG},
+    url     = {https://arxiv.org/abs/2609.20807}, 
+}
+```

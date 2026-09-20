@@ -5,15 +5,13 @@ GRPO based training logic - https://arxiv.org/abs/2402.03300
 from __future__ import annotations
 from typing import Callable, Deque
 
-import math
-import copy
 from pathlib import Path
 from functools import partial
 from collections import deque, namedtuple
 from random import randrange
 
 import torch
-from torch import nn, Tensor, is_tensor, tensor
+from torch import nn, Tensor, is_tensor, tensor, einsum
 from torch.nn import Module
 import torch.nn.functional as F
 
@@ -24,12 +22,18 @@ from adam_atan2_pytorch import AdoptAtan2
 
 from palm_rlhf_pytorch.palm import PaLM
 from palm_rlhf_pytorch.reward import RewardModel
-from palm_rlhf_pytorch.utils import masked_mean, eval_decorator
+from palm_rlhf_pytorch.utils import masked_mean, eval_decorator, log
 
 from accelerate import Accelerator
 from accelerate.utils.tqdm import tqdm
 
-import einx
+from torch_einops_utils import (
+    cast_tensor,
+    shift,
+    entropy
+)
+
+from einx import get_at, add, multiply
 from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
@@ -172,9 +176,7 @@ def exists(val):
     return val is not None
 
 def default(val, d):
-    if exists(val):
-        return val
-    return d() if callable(d) else d
+    return val if exists(val) else d
 
 def first(x):
     return x[0]
@@ -197,25 +199,10 @@ def pad_sequence_fixed(sequences, *args, **kwargs):
 
     return rearrange(out, '... 1 -> ...')
 
-def cast_tensor(val, **kwargs):
-    if is_tensor(val):
-        return val
-    return tensor(val, **kwargs)
-
-def log(t, eps = 1e-20):
-    return torch.log(t.clamp(min = eps))
-
 def safe_div(num, den, eps = 1e-8):
     den = cast_tensor(den)
     assert (den >= 0).all()
     return num / den.clamp(min = eps)
-
-def shift(t, value = 0, shift = 1, dim = -1):
-    zeros = (0, 0) * (-dim - 1)
-    return F.pad(t, (*zeros, shift, -shift), value = value)
-
-def entropy(prob, dim = -1):
-    return (-prob * log(prob)).sum(dim = -1)
 
 def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
     """
@@ -228,6 +215,59 @@ def masked_kl_div(prob1, prob2, mask = None, reduce_batch = False):
         return loss
 
     return loss.mean()
+
+# score centering - Marek & Ryabinin (2026) - https://arxiv.org/abs/2609.20807
+# cancels systematic drift caused by training-inference mismatch
+
+def score_centering_loss(
+    train_log_probs: Tensor,
+    samp_probs: Tensor,
+    actions: Tensor,
+    advantages: Tensor,
+    topk: int | None = None,
+    weight_fn: Callable = torch.ones_like,
+    eps: float = 1e-6,
+) -> Tensor:
+    l = train_log_probs.shape[-1]
+
+    advantages, _ = pack([advantages], 'b *')
+
+    samp_probs = samp_probs.detach()
+
+    # sampled action loss
+
+    action_log_prob = get_at('b n [l], b n -> b n', train_log_probs, actions)
+    action_samp_prob = get_at('b n [l], b n -> b n', samp_probs, actions)
+
+    ratio = (action_log_prob.exp() / action_samp_prob.clamp(min = eps)).detach()
+    weighted_action_log_prob = weight_fn(ratio) * action_log_prob
+
+    # head tokens (full vocabulary or top-k)
+
+    is_topk = exists(topk) and topk < l
+
+    head_probs, head_log_probs = samp_probs, train_log_probs
+
+    if is_topk:
+        head_probs, head_ids = samp_probs.topk(topk, dim = -1)
+        head_log_probs = get_at('b n [l], b n k -> b n k', train_log_probs, head_ids)
+
+    head_train_probs = head_log_probs.exp()
+    residual = head_probs * weight_fn(head_train_probs / head_probs.clamp(min = eps))
+
+    # model sampler tail with trainer tail if top-k
+
+    if is_topk:
+        samp_tail = (1. - head_probs.sum(dim = -1)).clamp(min = eps)
+        train_tail = (1. - head_train_probs.sum(dim = -1)).clamp(min = eps)
+        tail_ratio = train_tail / samp_tail
+        tail_scale = weight_fn(tail_ratio) / tail_ratio
+        residual = residual - multiply('b n, b n k -> b n k', tail_scale, head_train_probs)
+
+    # stop gradient through centering coefficients - eq. 8, 14
+
+    centered_score = weighted_action_log_prob - einsum('b n l, b n l -> b n', residual.detach(), head_log_probs)
+    return - advantages * centered_score
 
 # rlhf trainer
 
@@ -260,6 +300,9 @@ class RLHFTrainer(Module):
         use_dr_grpo = False,                    # Sea AI lab - https://arxiv.org/abs/2503.20783
         dr_grpo_constant = None,                # constant scaling factor for Dr. GRPO (defaults to action_sample_times + 1)
         use_max_rl = False,                     # maxRL - https://arxiv.org/abs/2602.02710
+        use_score_centering = False,            # Marek & Ryabinin - https://arxiv.org/abs/2609.20807
+        score_centering_topk = None,            # top-k approximation (e.g. 128 or 32); recommended for large vocabularies, defaults to full vocabulary
+        score_centering_weight_fn: Callable = torch.ones_like, # optional weight function f(r) to compose score centering with IS (e.g. TIS, MIS)
         add_entropy_to_advantage = False,
         entropy_to_advantage_kappa = 2.,
         entropy_to_advantage_scale = 0.4,       # they use 0.4 for GRPO, 0.1 for PPO
@@ -330,6 +373,14 @@ class RLHFTrainer(Module):
 
         assert not (self.use_dr_grpo and self.use_max_rl), 'cannot use both Dr. GRPO and MaxRL'
 
+        # score centering
+
+        self.use_score_centering = use_score_centering
+        self.score_centering_topk = score_centering_topk
+        self.score_centering_weight_fn = score_centering_weight_fn
+
+        assert not (self.use_spo and self.use_score_centering), 'cannot use both SPO and Score Centering'
+
         # "reasoning from exploration" paper
 
         self.add_entropy_to_advantage = add_entropy_to_advantage
@@ -394,8 +445,7 @@ class RLHFTrainer(Module):
             sequences,
             mask,
             prompt_mask,
-            action_logits,
-            _
+            action_logits
         ) = actor.generate(
             prompt,
             *args,
@@ -448,17 +498,15 @@ class RLHFTrainer(Module):
                     mask = action_masks
                 )
 
-                action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
-                action_len = old_log_probs.shape[-1]
+                action_logits = shift(action_logits, 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
-                action_probs = action_logits.softmax(dim = -1)
-                action_log_probs = einx.get_at('b n [l], b n -> b n', action_probs, sequences)
-
-                action_log_probs = action_log_probs[:, -action_len:]
+                action_log_probs_all = action_logits.log_softmax(dim = -1)
+                action_probs = action_log_probs_all.exp()
+                action_log_probs = get_at('b n [l], b n -> b n', action_log_probs_all, sequences)
 
                 # calculate entropies, taking into account which part of the sequence is actually an action
 
-                per_token_entropies = entropy(action_probs)
+                per_token_entropies = entropy(action_probs, reduce = False)
 
                 # calculate kl div between old action probs and new ones, taking into account which part of the sequence is action or not
 
@@ -476,33 +524,43 @@ class RLHFTrainer(Module):
                 if self.add_entropy_to_advantage:
                     entropy_scale, kappa = self.entropy_to_advantage_scale, self.entropy_to_advantage_kappa
 
-                    entropy_reward = entropy_scale * per_token_entropies[..., -action_len:].detach()
+                    entropy_reward = entropy_scale * per_token_entropies.masked_fill(~action_masks, 0.).detach()
                     max_entropy_reward = rearrange(advantages.abs() / kappa, 'b -> b 1')
 
-                    advantages = einx.add('b, b n', advantages, entropy_reward.clamp(max = max_entropy_reward))
+                    advantages = add('b, b n', advantages, entropy_reward.clamp(max = max_entropy_reward))
 
                 else:
                     advantages = rearrange(advantages, 'b -> b 1')
 
                 entropies = masked_mean(per_token_entropies, mask = action_masks)
 
-                # calculate clipped surrogate objective, classic PPO loss
-
-                ratios = (action_log_probs - old_log_probs).exp()
-
-                # SPO - Line 14 Algorithm 1 - https://arxiv.org/abs/2401.16025v9
-                # else classic ppo
+                # calculate policy loss
 
                 if self.use_spo:
+                    # SPO - Line 14 Algorithm 1 - https://arxiv.org/abs/2401.16025v9
+                    ratios = (action_log_probs - old_log_probs).exp()
                     policy_loss = - (ratios * advantages) + (ratios - 1.).square() * (advantages.abs() / (2 * self.eps_clip))
+
+                elif self.use_score_centering:
+                    policy_loss = score_centering_loss(
+                        action_log_probs_all,
+                        old_action_probs,
+                        sequences,
+                        advantages,
+                        topk = self.score_centering_topk,
+                        weight_fn = self.score_centering_weight_fn,
+                    )
+
                 else:
+                    # classic ppo
+                    ratios = (action_log_probs - old_log_probs).exp()
                     surr1 = ratios * advantages
                     surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
                     policy_loss = - torch.min(surr1, surr2)
 
                 # entropy loss
 
-                policy_loss = policy_loss.mean(dim = -1) - self.beta_s * entropies
+                policy_loss = masked_mean(policy_loss, mask = action_masks) - self.beta_s * entropies
 
                 # combine losses
 
@@ -515,7 +573,7 @@ class RLHFTrainer(Module):
                 self.print(f'policy_loss: {loss.item():.3f}')
 
                 if exists(self.max_norm):
-                    self.accelerator.clip_grad_norm_(self.actor.actor_parameters(), self.max_norm)
+                    self.accelerate.clip_grad_norm_(self.actor.parameters(), self.max_norm)
 
                 self.actor_optim.step()
                 self.actor_optim.zero_grad()
@@ -573,14 +631,11 @@ class RLHFTrainer(Module):
                     temperature = temperature,
                 )
 
-                action_logits = shift(action_logits, shift = 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
+                action_logits = shift(action_logits, 1, dim = -2) # need to shift along sequence dimension by 1, since actions start from the last prompt (state) token
 
-                action_prob = action_logits.softmax(dim = -1)
-
-                action_len = actions.shape[-1]
-
-                action_log_prob = einx.get_at('b n [l], b n -> b n', action_prob, sequence)
-                action_log_prob = action_log_prob[:, -action_len:]
+                action_log_probs_all = action_logits.log_softmax(dim = -1)
+                action_prob = action_log_probs_all.exp()
+                action_log_prob = get_at('b n [l], b n -> b n', action_log_probs_all, sequence)
 
                 # get reward as given by supervised trained reward model
 
@@ -590,7 +645,7 @@ class RLHFTrainer(Module):
                 prompt_mask = torch.arange(sequence.shape[-1], device = device) < prompt_length
                 prompt_mask = repeat(prompt_mask, 'n -> b n', b = action_sample_times + 1)
 
-                mask = default(mask, lambda: torch.ones(sequence.shape, dtype = torch.bool, device = device))
+                mask = default(mask, torch.ones(sequence.shape, dtype = torch.bool, device = device))
 
                 rewards = self.reward_model(
                     sequence,
@@ -608,7 +663,7 @@ class RLHFTrainer(Module):
                 if self.use_dr_grpo:
                     divisor = default(self.dr_grpo_constant, action_sample_times + 1)
                 elif self.use_max_rl:
-                    divisor = rewards.mean()
+                    divisor = rewards.mean().abs()
                 else:
                     divisor = rewards.std()
 
@@ -633,4 +688,4 @@ class RLHFTrainer(Module):
                     self.learn(memories)
                     memories.clear()
 
-        print('dr grpo rlhf training complete')
+        self.print('grpo rlhf training complete')

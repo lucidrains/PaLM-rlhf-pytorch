@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "PaLM-rlhf-pytorch"
-version = "0.7.5"
+version = "0.8.0"
 description = "PaLM + Reinforcement Learning with Human Feedback - Pytorch"
 readme = "README.md"
 requires-python = ">= 3.6"
@@ -31,10 +31,10 @@ dependencies = [
     "accelerate",
     "adam-atan2-pytorch",
     "beartype",
-    "einx>=0.3.0",
+    "einx>=0.4.0",
     "einops>=0.8.0",
     "memmap-replay-buffer>=0.1.4",
-    "torch-einops-utils",
+    "torch-einops-utils>=0.1.27",
     "hl-gauss-pytorch>=0.1.19",
     "torch>=2.2",
     "tqdm",
